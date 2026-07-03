@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>MusicFree Adapter</title>
+  <link rel="stylesheet" href="static/css/style.css" />
+</head>
+
+<body>
+  <nav class="navbar">
+    <div class="brand">MusicFree<span>Adapter</span></div>
+    <div class="nav-tabs">
+      <button class="nav-tab active" data-tab="home">首页</button>
+      <button class="nav-tab" data-tab="rank">排行榜</button>
+      <button class="nav-tab" data-tab="settings">设置</button>
+    </div>
+  </nav>
+
+  <div class="content">
+    <!-- 首页：搜索音乐 + 音乐列表 -->
+    <section class="tab-page active" data-page="home">
+      <div id="no-plugin-tip" class="card tip-card" style="display:none">
+        <div class="tip-icon">&#127925;</div>
+        <div class="tip-body">
+          <div class="tip-title">还没有可用的插件</div>
+          <div class="tip-desc">请先到「设置」页面安装 MusicFree 插件，才能搜索和播放音乐。</div>
+        </div>
+        <button class="btn btn-primary btn-small" onclick="goToSettings()">前往设置</button>
+      </div>
+      <div id="search-bar" class="search-bar">
+        <div class="form-row">
+          <input id="search-keyword" type="text" placeholder="输入歌名或歌手搜索..." />
+          <button id="search-btn" class="btn btn-primary">搜索</button>
+        </div>
+      </div>
+      <div id="search-results-wrap">
+        <div id="search-results">
+          <div class="empty-state">输入关键词开始搜索</div>
+        </div>
+        <div id="search-loader" class="empty-state" style="display:none">加载更多...</div>
+      </div>
+    </section>
+
+    <!-- 排行榜 -->
+    <section class="tab-page" data-page="rank">
+      <div class="card">
+        <h2>排行榜</h2>
+        <div id="rank-tabs" class="rank-tabs"></div>
+        <div id="rank-list">加载中...</div>
+      </div>
+      <div id="rank-detail" class="card" style="display:none">
+        <div class="rank-detail-header">
+          <button class="btn btn-small" id="rank-back-btn">← 返回</button>
+          <h2 id="rank-detail-title">榜单详情</h2>
+        </div>
+        <div id="rank-detail-songs"></div>
+      </div>
+    </section>
+
+    <!-- 设置：播放设置 + 已安装插件 + 添加插件 + 排行榜管理 -->
+    <section class="tab-page" data-page="settings">
+      <div class="card">
+        <h2>播放设置</h2>
+        <div class="form-row" style="align-items:center">
+          <label style="white-space:nowrap;font-size:14px">默认音质</label>
+          <select id="default-quality" class="form-control" style="flex:1">
+            <option value="low">流畅 128k</option>
+            <option value="standard" selected>标准 320k</option>
+            <option value="high">高品 flac</option>
+            <option value="super">超清 flac24</option>
+          </select>
+          <button id="save-quality-btn" class="btn btn-primary">保存</button>
+        </div>
+        <div id="quality-status" style="margin-top:8px"></div>
+        <p style="font-size:12px;color:var(--text-sub);margin:8px 0 0">
+          播放时先尝试默认音质，若该音质不可用则自动降级尝试更低音质，直至最低音质都失败才反馈播放失败。
+        </p>
+      </div>
+      <div class="card">
+        <h2>外部搜索接口</h2>
+        <p style="font-size:13px;color:var(--text-sub);margin:0 0 10px">供外部系统调用的标准化搜索接口，支持通过关键词搜索歌曲并返回播放地址。</p>
+        <div class="form-row" style="align-items:center">
+          <label style="white-space:nowrap;font-size:14px">请求方式</label>
+          <code id="external-method" style="background:var(--bg-secondary);padding:4px 10px;border-radius:var(--radius);font-size:14px">POST</code>
+          <label style="white-space:nowrap;font-size:14px;margin-left:16px">接口地址</label>
+          <input id="external-endpoint" type="text" readonly class="form-row-input" onclick="this.select()" />
+          <button class="btn btn-small" onclick="copyExternalEndpoint()">复制</button>
+        </div>
+        <div id="external-status" style="margin-top:8px"></div>
+        <details style="margin-top:10px;font-size:12px;color:var(--text-sub)">
+          <summary style="cursor:pointer;user-select:none">请求 / 响应示例</summary>
+          <pre style="background:var(--bg-secondary);padding:10px;border-radius:var(--radius);overflow-x:auto;margin:8px 0 0;line-height:1.5;font-size:12px"><code>{
+  // 请求体
+  "keyword": "歌曲名称",
+  "hint": {
+    "title": "歌曲名称",
+    "artist": "歌手名",
+    "duration": 240
+  },
+  "quality": "320k"
+}
+
+// 成功响应
+{
+  "code": 0,
+  "msg": "success",
+  "data": {
+    "title": "演员",
+    "artist": "薛之谦",
+    "album": "几个薛之谦",
+    "duration": 240,
+    "cover_url": "https://example.com/cover.jpg",
+    "url": "https://example.com/song.mp3",
+    "source_data": {
+      "platform": "netease",
+      "quality": "320k",
+      "songInfo": { "..." }
+    }
+  }
+}
+
+// 错误码: 0=成功 400=参数错误 404=未找到 500=服务器错误</code></pre>
+        </details>
+      </div>
+      <div class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <h2 style="margin:0">已安装的插件</h2>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-small" onclick="openAddPluginModal()">+ 添加插件</button>
+            <button class="btn btn-small" onclick="openSubModal()">订阅设置</button>
+          </div>
+        </div>
+        <div id="plugin-list" style="margin-top:10px">加载中...</div>
+      </div>
+
+    </section>
+  </div>
+
+  <div id="global-player">
+    <img id="gp-cover" alt="cover" />
+    <div id="gp-meta">
+      <div id="gp-title">未播放</div>
+      <div id="gp-artist"></div>
+    </div>
+    <div id="gp-lyric"></div>
+    <select id="gp-quality" title="音质">
+      <option value="low">流畅 128k</option>
+      <option value="standard" selected>标准 320k</option>
+      <option value="high">高品 flac</option>
+      <option value="super">超清 flac24</option>
+    </select>
+    <audio id="gp-audio" controls></audio>
+    <span id="gp-status"></span>
+  </div>
+
+  <!-- 用户变量编辑弹窗 -->
+  <div id="vars-modal" class="modal-overlay" style="display:none">
+    <div class="modal-content">
+      <div class="modal-header">
+        <span id="vars-modal-title">插件变量</span>
+        <button class="modal-close" onclick="closeVarsModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="vars-hint">以 JSON 键值对格式配置插件变量（env.getUserVariables）</p>
+        <textarea id="vars-editor" rows="8" placeholder='{\n  "key": "value"\n}'></textarea>
+        <div id="vars-status"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closeVarsModal()">取消</button>
+        <button class="btn btn-primary" id="vars-save-btn" onclick="saveVars()">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 歌单选择弹窗 -->
+  <div id="playlist-modal" class="modal-overlay" style="display:none">
+    <div class="modal-content" style="max-width:420px">
+      <div class="modal-header">
+        <span>选择歌单</span>
+        <button class="modal-close" onclick="closePlaylistModal()">&times;</button>
+      </div>
+      <div class="modal-body" id="playlist-modal-body">
+        <p style="margin:0 0 10px;font-size:13px;color:var(--text-sub)">将要导入的歌曲添加到哪个歌单？</p>
+        <div id="playlist-list" style="max-height:300px;overflow-y:auto;margin-bottom:8px">
+          <div class="empty-state">加载中...</div>
+        </div>
+        <div id="playlist-new-name-area" style="display:none;margin-top:8px">
+          <input id="playlist-new-name" type="text" placeholder="输入新歌单名称" class="form-control" style="width:100%" />
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closePlaylistModal()">取消</button>
+        <button class="btn btn-primary" id="playlist-confirm-btn" onclick="confirmPlaylistImport()">确认导入</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 订阅设置弹窗 -->
+  <div id="sub-modal" class="modal-overlay" style="display:none">
+    <div class="modal-content sub-modal-content">
+      <div class="modal-header">
+        <div>
+          <span style="font-size:15px;font-weight:600">订阅设置</span>
+          <p style="margin:2px 0 0;font-size:12px;color:var(--text-sub)">管理你的插件订阅源，保持插件自动更新</p>
+        </div>
+        <button class="modal-close" onclick="closeSubModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-row sub-input-row">
+          <input id="sub-url-input" type="text" placeholder="订阅链接" class="form-row-input" />
+          <button id="sub-add-btn" class="btn btn-primary" onclick="addSubscription()">+ 添加订阅</button>
+          <button id="sub-cancel-btn" class="btn" style="display:none" onclick="cancelEdit()">取消</button>
+        </div>
+        <div id="sub-list" style="margin-top:12px;max-height:320px;overflow-y:auto"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="updateAllSubscriptions()"><span style="margin-right:4px">&#8635;</span>全部更新</button>
+        <button class="btn btn-primary" onclick="closeSubModal()">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 添加插件弹窗 -->
+  <div id="add-plugin-modal" class="modal-overlay" style="display:none">
+    <div class="modal-content sub-modal-content">
+      <div class="modal-header">
+        <div>
+          <span style="font-size:15px;font-weight:600">添加插件</span>
+          <p style="margin:2px 0 0;font-size:12px;color:var(--text-sub)">通过链接或本地 JS 文件安装 MusicFree 插件</p>
+        </div>
+        <button class="modal-close" onclick="closeAddPluginModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <!-- URL 安装 -->
+        <div style="margin-bottom:16px">
+          <label style="display:block;font-size:13px;font-weight:600;margin-bottom:8px">通过链接安装</label>
+          <div class="form-row">
+            <input id="plugin-url-input" type="text" placeholder="输入 MusicFree 插件 JS 文件的 URL" class="form-row-input" />
+            <button id="plugin-url-btn" class="btn btn-primary" onclick="installFromUrl()">安装</button>
+          </div>
+        </div>
+        <!-- 分隔线 -->
+        <div style="position:relative;text-align:center;margin:14px 0">
+          <hr style="border:none;border-top:1px solid var(--border);margin:0" />
+          <span style="position:absolute;top:-9px;left:50%;transform:translateX(-50%);background:var(--surface);padding:0 12px;font-size:12px;color:var(--text-sub)">或</span>
+        </div>
+        <!-- 文件上传 -->
+        <div>
+          <label style="display:block;font-size:13px;font-weight:600;margin-bottom:8px">通过本地文件安装</label>
+          <div id="plugin-drop-zone" class="drop-zone">
+            <input id="plugin-file-input" type="file" accept=".js,text/javascript" style="display:none" />
+            <div class="drop-zone-inner">
+              <div class="drop-zone-icon">&#128229;</div>
+              <div class="drop-zone-text">点击选择文件或拖拽 .js 文件到此处</div>
+              <div id="plugin-file-name" class="drop-zone-file"></div>
+            </div>
+          </div>
+          <button id="plugin-upload-btn" class="btn btn-primary" style="width:100%;margin-top:10px;display:none" onclick="installFromFile()">上传安装</button>
+        </div>
+        <div id="add-plugin-status" style="margin-top:12px"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary" onclick="closeAddPluginModal()">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="static/js/app.js"></script>
+</body>
+
+</html>

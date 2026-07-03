@@ -1,0 +1,16 @@
+{
+  "name": "@songloft/musicfree-adapter",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MusicFree plugin adapter for Songloft - enables MusicFree plugins to work with Songloft",
+  "scripts": {
+    "build": "songloft-plugin build",
+    "dev": "songloft-plugin dev",
+    "validate": "songloft-plugin validate"
+  },
+  "devDependencies": {
+    "@songloft/plugin-sdk": "^2.7.1",
+    "@songloft/plugin-builder": "^2.7.1",
+    "typescript": "^5.7.0"
+  }
+}
