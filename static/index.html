@@ -14,6 +14,7 @@
     <div class="nav-tabs">
       <button class="nav-tab active" data-tab="home">首页</button>
       <button class="nav-tab" data-tab="rank">排行榜</button>
+      <button class="nav-tab" data-tab="hotsheet">热门歌单</button>
       <button class="nav-tab" data-tab="settings">设置</button>
     </div>
   </nav>
@@ -56,6 +57,22 @@
           <h2 id="rank-detail-title">榜单详情</h2>
         </div>
         <div id="rank-detail-songs"></div>
+      </div>
+    </section>
+
+    <!-- 热门歌单 -->
+    <section class="tab-page" data-page="hotsheet">
+      <div class="card">
+        <h2>热门歌单</h2>
+        <div id="hs-tags" class="rank-tabs"></div>
+        <div id="hs-list">加载中...</div>
+      </div>
+      <div id="hs-detail" class="card" style="display:none">
+        <div class="rank-detail-header">
+          <button class="btn btn-small" id="hs-back-btn">← 返回</button>
+          <h2 id="hs-detail-title">歌单详情</h2>
+        </div>
+        <div id="hs-detail-songs"></div>
       </div>
     </section>
 
@@ -130,9 +147,11 @@
           <div style="display:flex;gap:8px">
             <button class="btn btn-small" onclick="openAddPluginModal()">+ 添加插件</button>
             <button class="btn btn-small" onclick="openSubModal()">订阅设置</button>
+            <button class="btn btn-small" onclick="openSubModalAndUpdate()">全部更新</button>
           </div>
         </div>
         <div id="plugin-list" style="margin-top:10px">加载中...</div>
+      </div>
       </div>
 
     </section>
@@ -214,6 +233,15 @@
           <button id="sub-cancel-btn" class="btn" style="display:none" onclick="cancelEdit()">取消</button>
         </div>
         <div id="sub-list" style="margin-top:12px;max-height:320px;overflow-y:auto"></div>
+        <div id="sub-update-progress" style="display:none;margin-top:12px">
+          <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px">
+            <span id="sub-update-text">正在更新...</span>
+            <span id="sub-update-count">0/0</span>
+          </div>
+          <div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden">
+            <div id="sub-update-bar" style="height:100%;width:0%;background:var(--primary);border-radius:3px;transition:width .3s"></div>
+          </div>
+        </div>
       </div>
       <div class="modal-footer">
         <button class="btn" onclick="updateAllSubscriptions()"><span style="margin-right:4px">&#8635;</span>全部更新</button>

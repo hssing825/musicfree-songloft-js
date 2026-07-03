@@ -1,5 +1,5 @@
 {
-  "name": "musicfree-adapter",
+  "name": "musicFree插件适配器",
   "version": "1.0.0",
   "description": "MusicFree插件适配器，允许Songloft使用MusicFree格式的音源插件",
   "author": "LIRJ",

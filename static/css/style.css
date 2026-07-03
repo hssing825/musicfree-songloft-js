@@ -32,7 +32,7 @@ body {
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
-.navbar .brand { font-size: 16px; font-weight: 700; margin-right: 8px; }
+.navbar .brand { font-size: 16px; font-weight: 700; margin-right: 8px; white-space: nowrap; }
 .navbar .brand span { color: var(--primary); }
 .nav-tabs { display: flex; gap: 4px; }
 .nav-tab {
@@ -203,7 +203,7 @@ body {
   body { font-size: 15px; }
 
   .navbar { gap: 12px; padding: 0 14px; height: 48px; }
-  .navbar .brand { font-size: 15px; margin-right: 0; }
+  .navbar .brand { display: none; }
   .nav-tab { padding: 6px 12px; }
 
   .content { padding: 12px; }
@@ -221,6 +221,7 @@ body {
   .data-table.songs:not(.rank-song-table) td:nth-child(3),
   .data-table.songs:not(.rank-song-table) th:nth-child(4),
   .data-table.songs:not(.rank-song-table) td:nth-child(4) { display: none; }
+  .data-table.songs:not(.rank-song-table) thead { display: none; }
   /* 排行榜详情表（有复选框+封面列）：隐藏艺术家和来源列 */
   .data-table.rank-song-table th:nth-child(4),
   .data-table.rank-song-table td:nth-child(4),
@@ -234,6 +235,9 @@ body {
   .data-table.plugins th:nth-child(3),
   .data-table.plugins td:nth-child(3) { display: none; }
   .data-table.plugins .cell-sub { display: block; }
+  /* 插件卡片头部按钮折行 */
+  .card > div:first-child { flex-wrap: wrap; gap: 6px; }
+  .card > div:first-child .btn-small { font-size: 12px; padding: 4px 10px; }
 
   .data-table th, .data-table td { padding: 10px 8px; }
 
@@ -455,4 +459,15 @@ body {
 .drop-zone-inner { pointer-events: none; }
 .drop-zone-icon { font-size: 28px; color: var(--text-sub); }
 .drop-zone-text { font-size: 13px; color: var(--text-sub); margin-top: 6px; }
+
+/* Toast 弹出提示 */
+.toast-message {
+  position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
+  background: #333; color: #fff; padding: 10px 20px; border-radius: 8px;
+  font-size: 14px; z-index: 9999; white-space: nowrap;
+  box-shadow: 0 4px 12px rgba(0,0,0,.2);
+  transition: opacity .3s;
+}
+.toast-message.toast-fade { opacity: 0; }
+.toast-message.toast-error { background: #c0392b; }
 .drop-zone-file { font-size: 13px; color: var(--primary); font-weight: 500; margin-top: 4px; word-break: break-all; }

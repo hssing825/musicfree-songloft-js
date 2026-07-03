@@ -57,6 +57,7 @@ interface TopListDetailResult {
 interface MusicFreePlugin {
   platform: string;
   version: string;
+  srcUrl?: string;
   search?: (query: string, page: number, type: string) => Promise<SearchResult>;
   getMediaSource?: (musicItem: MusicItem, quality: string) => Promise<MediaSource | null>;
   getLyric?: (musicItem: MusicItem) => Promise<LyricResult | null>;
@@ -66,6 +67,8 @@ interface MusicFreePlugin {
   getMusicInfo?: (musicBase: { id: string; platform?: string }) => Promise<Partial<MusicItem> | null>;
   getTopLists?: () => Promise<TopListGroup[]>;
   getTopListDetail?: (topListItem: MusicSheetItem, page: number) => Promise<TopListDetailResult>;
+  getRecommendSheetTags?: () => Promise<string[]>;
+  getRecommendSheetsByTag?: (tag: string, page: number) => Promise<SearchResult>;
 }
 
 const installedPlugins: Map<string, MusicFreePlugin> = new Map();
@@ -329,6 +332,7 @@ router.get('/plugins', () => {
     url,
     platform: plugin.platform,
     version: plugin.version,
+    srcUrl: (plugin as any).srcUrl || '',
     enabled: !disabledPlugins.has(url),
     capabilities: {
       search: typeof plugin.search === 'function',
@@ -337,7 +341,8 @@ router.get('/plugins', () => {
       getAlbumInfo: typeof plugin.getAlbumInfo === 'function',
       getArtistWorks: typeof plugin.getArtistWorks === 'function',
       importMusicSheet: typeof plugin.importMusicSheet === 'function',
-      getMusicInfo: typeof plugin.getMusicInfo === 'function'
+      getMusicInfo: typeof plugin.getMusicInfo === 'function',
+      getRecommendSheetTags: typeof plugin.getRecommendSheetTags === 'function',
     }
   }));
   return jsonResponse({ plugins });
@@ -467,6 +472,54 @@ router.put('/plugins', async (req) => {
   }
 });
 
+// 更新插件
+router.put('/plugins/update', async (req) => {
+  try {
+    const body = await parseBody(req);
+    const url = body.url;
+
+    if (!url) {
+      return jsonResponse({ error: 'URL is required' }, 400);
+    }
+    if (!installedPlugins.has(url)) {
+      return jsonResponse({ error: 'Plugin not found' }, 404);
+    }
+
+    const oldPlugin = installedPlugins.get(url)!;
+    const srcUrl = (oldPlugin as any).srcUrl;
+    if (!srcUrl) {
+      return jsonResponse({ error: '插件没有配置更新地址 (srcUrl)' }, 400);
+    }
+
+    // 下载并加载新版本
+    const result = await loadPluginFromUrl(srcUrl);
+    if (!result.plugin) {
+      return jsonResponse({ error: result.error || '下载更新失败' }, 500);
+    }
+
+    // 比较版本号
+    if (compareVersion(result.plugin.version, oldPlugin.version) <= 0) {
+      return jsonResponse({ error: '当前已是最新版本', current: oldPlugin.version, latest: result.plugin.version }, 400);
+    }
+
+    // 保存新版本（用原来的 url 覆盖）
+    if (result.code) {
+      await savePluginCode(url, result.code);
+    }
+    installedPlugins.set(url, result.plugin);
+    await savePlugins();
+
+    return jsonResponse({
+      success: true,
+      platform: result.plugin.platform,
+      oldVersion: oldPlugin.version,
+      newVersion: result.plugin.version,
+    });
+  } catch (error) {
+    return jsonResponse({ error: String(error) }, 500);
+  }
+});
+
 router.get('/search', async (req) => {
   try {
     const queryParams = parseQuery(req.query || '');
@@ -480,6 +533,7 @@ router.get('/search', async (req) => {
     }
 
     const page = Math.max(1, parseInt(pageStr, 10) || 1);
+    const SEARCH_TIMEOUT = 15000;
 
     const tasks = Array.from(installedPlugins)
       .filter(([url, plugin]) => {
@@ -489,17 +543,26 @@ router.get('/search', async (req) => {
       })
       .map(async ([, plugin]) => {
         try {
-          const result = await withTimeout(plugin.search!(query, page, type), PLUGIN_TIMEOUT, `Search[${plugin.platform}]`);
+          const result = await withTimeout(plugin.search!(query, page, type), SEARCH_TIMEOUT, `Search[${plugin.platform}]`);
           if (result && result.data) {
             return result.data.map(item => ({ ...item, platform: plugin.platform }));
           }
         } catch (error) {
-          songloft.log.error(`Search failed for ${plugin.platform}: ${error}`);
+          songloft.log.warn(`Search[${plugin.platform}] failed: ${error}`);
         }
         return [] as MusicItem[];
       });
 
-    const nested = await Promise.all(tasks);
+    // 全局超时：如果超时则返回已收集到的结果
+    let nested: MusicItem[][];
+    try {
+      nested = await withTimeout(Promise.all(tasks), SEARCH_TIMEOUT + 2000, 'SearchAll');
+    } catch {
+      songloft.log.warn(`Search global timeout, returning partial results`);
+      nested = await Promise.allSettled(tasks).then(results =>
+        results.map(r => (r.status === 'fulfilled' ? r.value : []))
+      );
+    }
     const results = nested.flat();
 
     return jsonResponse({ isEnd: results.length === 0, data: results });
@@ -752,6 +815,61 @@ router.get('/top-list-detail', async (req) => {
   }
 });
 
+// === 热门歌单 ===
+router.get('/recommend-sheets/tags', async () => {
+  try {
+    const tagsByPlatform: { platform: string; tags: string[] }[] = [];
+    for (const [url, plugin] of installedPlugins) {
+      if (disabledPlugins.has(url) || typeof plugin.getRecommendSheetTags !== 'function') continue;
+      try {
+        const tags = await withTimeout(plugin.getRecommendSheetTags!(), PLUGIN_TIMEOUT, `getRecommendSheetTags[${plugin.platform}]`);
+        if (Array.isArray(tags) && tags.length > 0) {
+          tagsByPlatform.push({ platform: plugin.platform, tags });
+        }
+      } catch (error) {
+        songloft.log.warn(`getRecommendSheetTags failed for ${plugin.platform}: ${error}`);
+      }
+    }
+    return jsonResponse({ tagsByPlatform });
+  } catch (error) {
+    return jsonResponse({ error: String(error) }, 500);
+  }
+});
+
+router.get('/recommend-sheets/list', async (req) => {
+  try {
+    const queryParams = parseQuery(req.query || '');
+    const platform = queryParams['platform'];
+    const tag = queryParams['tag'];
+    const pageStr = queryParams['page'] || '1';
+
+    if (!platform || !tag) {
+      return jsonResponse({ error: 'platform and tag are required' }, 400);
+    }
+
+    const page = Math.max(1, parseInt(pageStr, 10) || 1);
+    const plugin = Array.from(installedPlugins.values()).find(p => p.platform === platform);
+    if (!plugin) {
+      return jsonResponse({ error: 'Plugin not found' }, 404);
+    }
+    if (typeof plugin.getRecommendSheetsByTag !== 'function') {
+      return jsonResponse({ error: 'Plugin does not support getRecommendSheetsByTag' }, 400);
+    }
+
+    const result = await withTimeout(plugin.getRecommendSheetsByTag(tag, page), PLUGIN_TIMEOUT, `getRecommendSheetsByTag[${platform}]`);
+    if (!result || !Array.isArray(result.data)) {
+      return jsonResponse({ isEnd: true, sheets: [] });
+    }
+
+    return jsonResponse({
+      isEnd: result.isEnd !== false,
+      sheets: result.data.map((item: any) => ({ ...item, platform })),
+    });
+  } catch (error) {
+    return jsonResponse({ error: String(error) }, 500);
+  }
+});
+
 router.get('/plugin-vars', async (req) => {
   try {
     const queryParams = parseQuery(req.query || '');
@@ -820,7 +938,7 @@ router.post('/external/search', async (req) => {
             return result.data.map(item => ({ ...item, platform: plugin.platform }));
           }
         } catch (error) {
-          songloft.log.error(`External search failed for ${plugin.platform}: ${error}`);
+          songloft.log.warn(`External search[${plugin.platform}] failed: ${error}`);
         }
         return [] as MusicItem[];
       });
@@ -946,9 +1064,78 @@ router.post('/external/search', async (req) => {
       },
     });
   } catch (error) {
-    return jsonResponse({ code: 500, msg: '服务器内部错误: ' + String(error), data: null });
+    return jsonResponse({ error: String(error) }, 500);
   }
 });
+
+// 全部更新插件（批量检查更新）
+router.post('/plugins/update-all', async () => {
+  try {
+    const plugins = Array.from(installedPlugins.entries())
+      .filter(([url, plugin]) => {
+        if (disabledPlugins.has(url)) return false;
+        return !!(plugin as any).srcUrl;
+      })
+      .map(([url, plugin]) => ({
+        url,
+        platform: plugin.platform,
+        version: plugin.version,
+        srcUrl: (plugin as any).srcUrl,
+      }));
+
+    const total = plugins.length;
+    if (total === 0) {
+      return jsonResponse({ total: 0, updated: 0, failed: 0, results: [] });
+    }
+
+    const results: { platform: string; oldVersion: string; newVersion?: string; error?: string }[] = [];
+    let updated = 0;
+    let failed = 0;
+
+    for (let i = 0; i < total; i++) {
+      const p = plugins[i];
+      try {
+        const result = await loadPluginFromUrl(p.srcUrl);
+        if (!result.plugin) {
+          failed++;
+          results.push({ platform: p.platform, oldVersion: p.version, error: result.error || '下载失败' });
+          continue;
+        }
+        if (compareVersion(result.plugin.version, p.version) <= 0) {
+          results.push({ platform: p.platform, oldVersion: p.version, newVersion: result.plugin.version });
+          continue;
+        }
+        if (result.code) {
+          await savePluginCode(p.url, result.code);
+        }
+        installedPlugins.set(p.url, result.plugin);
+        updated++;
+        results.push({ platform: p.platform, oldVersion: p.version, newVersion: result.plugin.version });
+      } catch (e) {
+        failed++;
+        results.push({ platform: p.platform, oldVersion: p.version, error: String(e) });
+      }
+    }
+
+    await savePlugins();
+    return jsonResponse({ total, updated, failed, results });
+  } catch (error) {
+    return jsonResponse({ error: String(error) }, 500);
+  }
+});
+
+// 版本比较辅助函数
+function compareVersion(a: string, b: string): number {
+  const pa = a.split('.').map(Number);
+  const pb = b.split('.').map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const va = pa[i] || 0;
+    const vb = pb[i] || 0;
+    if (va > vb) return 1;
+    if (va < vb) return -1;
+  }
+  return 0;
+}
 
 // 获取外部接口基础地址（供前端显示）
 router.get('/external/endpoint', async (req) => {

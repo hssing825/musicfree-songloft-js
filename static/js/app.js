@@ -53,7 +53,8 @@
       p.classList.toggle('active', p.getAttribute('data-page') === name);
     });
     if (name === 'rank') loadRankLists();
-    if (name === 'home') hideRankDetail();
+    if (name === 'hotsheet') loadHotSheetLists();
+    if (name === 'home') { hideRankDetail(); hideHotSheetDetail(); }
   }
   navTabs.forEach(function (tab) {
     tab.addEventListener('click', function () {
@@ -108,6 +109,7 @@
           '<td>' + featStr + '</td>' +
           '<td>' + toggle + '</td>' +
           '<td class="col-op">' +
+            (p.srcUrl ? '<button class="btn btn-small" onclick="updatePlugin(\'' + safeUrl + '\')" style="margin-right:4px">更新</button>' : '') +
             '<button class="btn btn-small btn-primary" onclick="openVarsModal(\'' + safeUrl + '\',\'' + escapeHtml(p.platform) + '\')" style="margin-right:4px">变量</button>' +
             '<button class="btn btn-small btn-danger" onclick="removePlugin(\'' + safeUrl + '\')">卸载</button>' +
           '</td></tr>';
@@ -158,10 +160,38 @@
       if (err || !data || !data.success) {
         showStatus(document.getElementById('plugin-list'), '操作失败', true);
       }
-      // 重新加载以同步状态样式（成功或失败都刷新，回滚错误的勾选态）
       loadPluginList();
     });
   };
+
+  window.updatePlugin = function (url) {
+    ajax('PUT', '/plugins/update', { url: url }, function (err, data) {
+      if (err || !data) {
+        showToast('更新失败（网络错误）', true);
+        return;
+      }
+      if (data.error) {
+        showToast(data.error, true);
+        return;
+      }
+      if (data.success) {
+        showToast(data.platform + ' 已从 v' + data.oldVersion + ' 更新到 v' + data.newVersion);
+        loadPluginList();
+      }
+    });
+  };
+
+  function showToast(msg, isError) {
+    var el = document.createElement('div');
+    el.className = 'toast-message' + (isError ? ' toast-error' : '');
+    el.textContent = msg;
+    document.body.appendChild(el);
+    setTimeout(function () {
+      el.classList.add('toast-fade');
+      setTimeout(function () { el.remove(); }, 300);
+    }, 2000);
+  }
+
 
   // --- Settings: default quality ---
   var qualitySelect = document.getElementById('default-quality');
@@ -437,9 +467,22 @@
   var _pickerState = { idx: -1, rowId: '', playlistId: null };
 
   // 实际的导入逻辑（不弹窗）
+  function normalizeDuration(d) {
+    if (d == null) return 0;
+    // 处理 "mm:ss" / "hh:mm:ss" 字符串格式
+    if (typeof d === 'string' && /^\d{1,2}:\d{2}(:\d{2})?$/.test(d.trim())) {
+      var parts = d.trim().split(':').map(Number);
+      if (parts.length === 2) return parts[0] * 60 + parts[1];
+      if (parts.length === 3) return parts[0] * 3600 + parts[1] * 60 + parts[2];
+    }
+    var n = parseFloat(d) || 0;
+    if (n <= 0) return 0;
+    if (n > 600) n = n / 1000;
+    return Math.round(n);
+  }
+
   function doImport(item, btn, playlistId, cb) {
-    var duration = parseFloat(item.duration) || 0;
-    if (duration > 600) duration = duration / 1000;
+    var duration = normalizeDuration(item.duration);
     var payload = [{
       title: item.title || '',
       artist: Array.isArray(item.artist) ? item.artist.join(', ') : (item.artist || ''),
@@ -493,8 +536,10 @@
   }
 
   window.importToSongloft = function (idx, rowId) {
-    var item = lastResults[idx];
-    if (!item && window._rankSongs && window._rankSongs[idx]) item = window._rankSongs[idx];
+    var fromRank = rowId && rowId.indexOf('rank-song-') === 0;
+    var item = fromRank
+      ? (window._rankSongs && window._rankSongs[idx] ? window._rankSongs[idx] : lastResults[idx])
+      : (lastResults[idx] ? lastResults[idx] : (window._rankSongs && window._rankSongs[idx]));
     if (!item) return;
     _pickerState.idx = idx;
     _pickerState.rowId = rowId;
@@ -574,8 +619,10 @@
     }
     closePlaylistModal();
 
-    var item = lastResults[idx];
-    if (!item && window._rankSongs && window._rankSongs[idx]) item = window._rankSongs[idx];
+    var fromRank = rowId && rowId.indexOf('rank-song-') === 0;
+    var item = fromRank
+      ? (window._rankSongs && window._rankSongs[idx] ? window._rankSongs[idx] : lastResults[idx])
+      : (lastResults[idx] ? lastResults[idx] : (window._rankSongs && window._rankSongs[idx]));
     if (!item) return;
     var btn = rowId ? document.querySelector('#' + rowId + ' .btn-import') : null;
 
@@ -1224,8 +1271,7 @@
       var item = songs[indices[i]];
       if (!item) { importOne(i + 1); return; }
       if (importBtn) importBtn.textContent = '导入中 ' + (done + 1) + '/' + total;
-      var duration = parseFloat(item.duration) || 0;
-      if (duration > 600) duration = duration / 1000;
+      var duration = normalizeDuration(item.duration);
       var payload = [{
         title: item.title || '',
         artist: Array.isArray(item.artist) ? item.artist.join(', ') : (item.artist || ''),
@@ -1311,6 +1357,177 @@
   document.getElementById('rank-back-btn').addEventListener('click', function () {
     rankDetailEl.style.display = 'none';
     rankListEl.style.display = '';
+  });
+
+  // --- 热门歌单 ---
+  var hsListEl = document.getElementById('hs-list');
+  var hsTagsEl = document.getElementById('hs-tags');
+  var hsDetailEl = document.getElementById('hs-detail');
+  var hsDetailTitle = document.getElementById('hs-detail-title');
+  var hsDetailSongs = document.getElementById('hs-detail-songs');
+  var allHotSheetGroups = [];
+  var hsCtx = { platform: '', tag: '', page: 1, isEnd: false, loading: false };
+
+  function renderHotSheetGroups(platform) {
+    var filtered = platform ? allHotSheetGroups.filter(function (g) { return g.platform === platform; }) : allHotSheetGroups;
+    if (filtered.length === 0) {
+      hsListEl.innerHTML = '<div class="empty-state">该平台暂无热门歌单</div>';
+      return;
+    }
+    var html = '';
+    filtered.forEach(function (group) {
+      if (group.tag) {
+        html += '<div class="rank-group-title">' + escapeHtml(group.tag) + '</div>';
+      }
+      html += '<div class="rank-grid">';
+      (group.items || []).forEach(function (item) {
+        var safeName = escapeHtml(item.title || '未知');
+        var safeDesc = escapeHtml(item.description || '');
+        var cover = item.coverImg || '';
+        var dataAttrs = 'data-platform="' + escapeHtml(item.platform || '') + '"' +
+          ' data-id="' + escapeHtml(item.id || '') + '"' +
+          ' data-title="' + safeName + '"';
+        html += '<div class="rank-card" onclick="openHotSheet(this)" ' + dataAttrs + '>' +
+          '<img class="rank-card-cover" src="' + (cover || '') + '" alt="' + safeName + '" onerror="this.style.display=\'none\';this.nextSibling.style.display=\'flex\'" />' +
+          '<div class="rank-card-cover rank-card-cover-fallback" style="display:' + (cover ? 'none' : 'flex') + ';background:linear-gradient(135deg,#e74c3c,#f39c12);font-size:40px;color:rgba(255,255,255,.9)">📋</div>' +
+          '<div class="rank-card-body"><h3>' + safeName + '</h3><p>' + safeDesc + '</p></div></div>';
+      });
+      html += '</div>';
+    });
+    hsListEl.innerHTML = html;
+  }
+
+  function loadHotSheetLists() {
+    hsDetailEl.style.display = 'none';
+    hsListEl.style.display = '';
+    hsListEl.innerHTML = '<div class="empty-state">加载中...</div>';
+    hsTagsEl.innerHTML = '';
+    ajax('GET', '/recommend-sheets/tags', null, function (err, data) {
+      if (err || !data) {
+        hsListEl.innerHTML = '<div class="message error-message">加载失败</div>';
+        return;
+      }
+      var tagsByPlatform = data.tagsByPlatform || [];
+      if (tagsByPlatform.length === 0) {
+        hsListEl.innerHTML = '<div class="empty-state">暂无热门歌单，请确认已安装支持热门歌单的插件</div>';
+        return;
+      }
+      // 先获取所有平台及其标签
+      allHotSheetGroups = [];
+      var platformTags = {};
+      tagsByPlatform.forEach(function (entry) {
+        platformTags[entry.platform] = entry.tags || [];
+      });
+      var platforms = Object.keys(platformTags);
+      var tabsHtml = '';
+      platforms.forEach(function (p) {
+        tabsHtml += '<span class="rank-tab' + (p === platforms[0] ? ' active' : '') + '" data-hs-platform="' + escapeHtml(p) + '">' + escapeHtml(p) + '</span>';
+      });
+      hsTagsEl.innerHTML = tabsHtml;
+      Array.from(hsTagsEl.children).forEach(function (tab) {
+        tab.addEventListener('click', function () {
+          var prev = hsTagsEl.querySelector('.active');
+          if (prev) prev.classList.remove('active');
+          tab.classList.add('active');
+          var platform = tab.getAttribute('data-hs-platform');
+          loadHotSheetTag(platform, platformTags[platform]);
+        });
+      });
+      loadHotSheetTag(platforms[0], platformTags[platforms[0]]);
+    });
+  }
+
+  function loadHotSheetTag(platform, tags) {
+    hsListEl.innerHTML = '<div class="empty-state">加载中...</div>';
+    allHotSheetGroups = [];
+    if (!tags || tags.length === 0) {
+      hsListEl.innerHTML = '<div class="empty-state">该平台暂无热门歌单</div>';
+      return;
+    }
+    var done = 0;
+    tags.forEach(function (tag) {
+      ajax('GET', '/recommend-sheets/list?platform=' + encodeURIComponent(platform) + '&tag=' + encodeURIComponent(tag) + '&page=1', null, function (err, data) {
+        done++;
+        if (!err && data && Array.isArray(data.sheets) && data.sheets.length > 0) {
+          allHotSheetGroups.push({ platform: platform, tag: tag, items: data.sheets });
+        }
+        if (done >= tags.length) {
+          renderHotSheetGroups(platform);
+        }
+      });
+    });
+  }
+
+  window.openHotSheet = function (el) {
+    hsCtx.platform = el.getAttribute('data-platform');
+    hsCtx.id = el.getAttribute('data-id');
+    hsCtx.page = 1;
+    hsCtx.isEnd = false;
+    hsCtx.loading = false;
+    var title = el.getAttribute('data-title');
+    hsListEl.style.display = 'none';
+    hsDetailEl.style.display = '';
+    hsDetailTitle.textContent = title || '歌单详情';
+    hsDetailSongs.innerHTML = '<div class="empty-state">加载中...</div>';
+    window._hsSongs = [];
+    _loadHsPage(true);
+  };
+
+  function _loadHsPage(reset) {
+    if (hsCtx.loading) return;
+    if (!reset && hsCtx.isEnd) return;
+    hsCtx.loading = true;
+    if (reset) {
+      hsDetailSongs.innerHTML = '<div class="empty-state">加载中...</div>';
+      window._hsSongs = [];
+      hsCtx.page = 1;
+    }
+    var params = 'platform=' + encodeURIComponent(hsCtx.platform) + '&tag=' + encodeURIComponent(hsCtx.id) + '&page=' + hsCtx.page;
+    ajax('GET', '/recommend-sheets/list?' + params, null, function (err, data) {
+      hsCtx.loading = false;
+      if (err || !data) {
+        if (reset) hsDetailSongs.innerHTML = '<div class="message error-message">加载失败</div>';
+        return;
+      }
+      var sheets = data.sheets || [];
+      var isEnd = data.isEnd !== false;
+      if (sheets.length === 0 && reset) {
+        hsDetailSongs.innerHTML = '<div class="empty-state">该歌单暂无内容</div>';
+        return;
+      }
+      if (sheets.length === 0) { hsCtx.isEnd = true; return; }
+      hsCtx.isEnd = isEnd;
+      hsCtx.page++;
+      var list = reset ? [] : window._hsSongs;
+      Array.prototype.push.apply(list, sheets);
+      window._hsSongs = list;
+      if (reset) {
+        var html = '<div class="rank-grid">';
+        sheets.forEach(function (item) {
+          var safeName = escapeHtml(item.title || '未知');
+          var cover = item.coverImg || '';
+          var dataAttrs = 'data-platform="' + escapeHtml(item.platform || '') + '"' +
+            ' data-id="' + escapeHtml(item.id || '') + '"' +
+            ' data-title="' + safeName + '"';
+          html += '<div class="rank-card" onclick="openHotSheet(this)" ' + dataAttrs + '>' +
+            '<img class="rank-card-cover" src="' + (cover || '') + '" alt="' + safeName + '" onerror="this.style.display=\'none\';this.nextSibling.style.display=\'flex\'" />' +
+            '<div class="rank-card-cover rank-card-cover-fallback" style="display:' + (cover ? 'none' : 'flex') + ';background:linear-gradient(135deg,#e74c3c,#f39c12);font-size:40px;color:rgba(255,255,255,.9)">📋</div>' +
+            '<div class="rank-card-body"><h3>' + safeName + '</h3></div></div>';
+        });
+        html += '</div>';
+        hsDetailSongs.innerHTML = html;
+      }
+    });
+  }
+
+  function hideHotSheetDetail() {
+    hsDetailEl.style.display = 'none';
+    hsListEl.style.display = '';
+  }
+
+  document.getElementById('hs-back-btn').addEventListener('click', function () {
+    hsDetailEl.style.display = 'none';
+    hsListEl.style.display = '';
   });
 
   // --- 用户变量编辑 ---
@@ -1442,6 +1659,11 @@
     loadSubscriptions(function () {
       renderSubList();
     });
+  };
+
+  window.openSubModalAndUpdate = function () {
+    openSubModal();
+    setTimeout(function () { updateAllSubscriptions(); }, 300);
   };
 
   window.closeSubModal = function () {
@@ -1603,19 +1825,38 @@
 
   window.updateAllSubscriptions = function () {
     if (subscriptions.length === 0) {
-      alert('暂无订阅源');
+      showToast('暂无订阅源', true);
       return;
     }
-    if (!confirm('确认更新全部订阅？将重新安装/更新所有订阅中的插件。')) return;
+    var btn = document.querySelector('#sub-modal .modal-footer .btn');
+    var progressWrap = document.getElementById('sub-update-progress');
+    var progressBar = document.getElementById('sub-update-bar');
+    var progressText = document.getElementById('sub-update-text');
+    var progressCount = document.getElementById('sub-update-count');
+
+    btn.disabled = true;
+    progressWrap.style.display = '';
+    progressBar.style.width = '0%';
+    progressCount.textContent = '0/' + subscriptions.length;
+
     var done = 0;
     var total = subscriptions.length;
     function next() {
       if (done >= total) {
-        alert('全部订阅已更新完成');
+        btn.disabled = false;
+        progressText.textContent = '全部订阅已更新完成';
+        progressBar.style.width = '100%';
+        progressCount.textContent = total + '/' + total;
+        setTimeout(function () { progressWrap.style.display = 'none'; }, 3000);
         return;
       }
+      var sub = subscriptions[done];
+      progressText.textContent = '正在更新：' + (sub.name || sub.url);
       updateSubscription(done, function () {
         done++;
+        var pct = Math.round(done / total * 100);
+        progressBar.style.width = pct + '%';
+        progressCount.textContent = done + '/' + total;
         next();
       });
     }
