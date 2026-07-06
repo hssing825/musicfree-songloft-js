@@ -27,6 +27,14 @@ function makeWordArray(hex: string): WordArrayLike {
   };
 }
 
+// 将 crypto-js 的输入（string / WordArrayLike）统一转为 hex
+function _waToString(input: any): string {
+  if (input == null) return '';
+  if (typeof input === 'string') return __go_buffer_from(input, 'utf8');
+  if (input.__hex !== undefined) return input.__hex;
+  return __go_buffer_from(String(input), 'utf8');
+}
+
 const HexEnc: Encoder = {
   stringify(wa: WordArrayLike): string {
     return wa.__hex;
@@ -100,6 +108,21 @@ export const CryptoJs: any = {
   SHA256(message: any): WordArrayLike {
     return makeWordArray(__go_crypto_sha256(toUtf8String(message)));
   },
+  mode: {
+    ECB: { _modeName: 'ECB' },
+    CBC: { _modeName: 'CBC' },
+    CFB: { _modeName: 'CFB' },
+    OFB: { _modeName: 'OFB' },
+    CTR: { _modeName: 'CTR' },
+  },
+  pad: {
+    Pkcs7: {},
+    NoPadding: {},
+    ZeroPadding: {},
+    AnsiX923: {},
+    Iso10126: {},
+    Iso97971: {},
+  },
   // 部分插件用到但运行时暂无对应桥接的算法，做安全降级（返回空/抛错在实际调用时才发生）
   lib: {
     WordArray: {
@@ -114,6 +137,32 @@ export const CryptoJs: any = {
         }
         return makeWordArray(hex);
       },
+    },
+  },
+  // AES encrypt/decrypt，底层复用运行时桥接 __go_crypto_aes_encrypt
+  AES: {
+    encrypt(message: any, key: any, cfg?: any): any {
+      const dataHex = _waToString(message);
+      const keyHex = _waToString(key);
+      const mode = (cfg && cfg.mode && cfg.mode._modeName) || 'CBC';
+      const ivHex = (cfg && cfg.iv) ? _waToString(cfg.iv) : '';
+      const cipherHex = __go_crypto_aes_encrypt(dataHex, mode, keyHex, ivHex);
+      const ct = makeWordArray(cipherHex);
+      return {
+        ciphertext: ct,
+        key: makeWordArray(keyHex),
+        iv: cfg && cfg.iv ? makeWordArray(_waToString(cfg.iv)) : undefined,
+        toString(encoder?: any): string {
+          if (!encoder || encoder === Base64Enc) {
+            try { return __go_buffer_to_string(cipherHex, 'base64'); } catch { return cipherHex; }
+          }
+          return encoder.stringify(ct);
+        },
+      };
+    },
+    decrypt(ciphertext: any, key: any, cfg?: any): any {
+      // decrypt not commonly used in MusicFree plugins, stub
+      return makeWordArray('');
     },
   },
 };
@@ -607,6 +656,87 @@ function createCheerioModule(): any {
   };
 }
 
+function createBigInteger(): (value: any, base?: number) => any {
+  // 轻量 big-integer shim，使用 JavaScript 原生 BigInt
+  // QuickJS / Go 运行时需支持 BigInt（ES2020）
+  function _val(v: any, base?: number): bigint {
+    if (typeof v === 'bigint') return v;
+    if (v instanceof _BI) return v._v;
+    if (base != null && base > 0 && typeof v === 'string') {
+      return BigInt(parseInt(v, base));
+    }
+    try { return BigInt(v); } catch { return BigInt(0); }
+  }
+  class _BI {
+    _v: bigint;
+    constructor(v: any, base?: number) { this._v = _val(v, base); }
+    add(n: any) { return new _BI(this._v + _val(n)); }
+    plus(n: any) { return this.add(n); }
+    subtract(n: any) { return new _BI(this._v - _val(n)); }
+    minus(n: any) { return this.subtract(n); }
+    multiply(n: any) { return new _BI(this._v * _val(n)); }
+    times(n: any) { return this.multiply(n); }
+    divide(n: any) { return new _BI(this._v / _val(n)); }
+    over(n: any) { return this.divide(n); }
+    mod(n: any) { return new _BI(this._v % _val(n)); }
+    pow(n: any) { return new _BI(this._v ** _val(n)); }
+    negate() { return new _BI(-this._v); }
+    abs() { return new _BI(this._v < 0n ? -this._v : this._v); }
+    equals(n: any) { return this._v === _val(n); }
+    notEquals(n: any) { return this._v !== _val(n); }
+    greater(n: any) { return this._v > _val(n); }
+    greaterOrEquals(n: any) { return this._v >= _val(n); }
+    lesser(n: any) { return this._v < _val(n); }
+    lesserOrEquals(n: any) { return this._v <= _val(n); }
+    compare(n: any) { const b = _val(n); return this._v < b ? -1 : this._v > b ? 1 : 0; }
+    isZero() { return this._v === 0n; }
+    isPositive() { return this._v > 0n; }
+    isNegative() { return this._v < 0n; }
+    isOdd() { return (this._v & 1n) === 1n; }
+    isEven() { return (this._v & 1n) === 0n; }
+    prev() { return new _BI(this._v - 1n); }
+    next() { return new _BI(this._v + 1n); }
+    not() { return new _BI(~this._v); }
+    and(n: any) { return new _BI(this._v & _val(n)); }
+    or(n: any) { return new _BI(this._v | _val(n)); }
+    xor(n: any) { return new _BI(this._v ^ _val(n)); }
+    shiftLeft(n: any) { return new _BI(this._v << _val(n)); }
+    shiftRight(n: any) { return new _BI(this._v >> _val(n)); }
+    modPow(e: any, m: any) {
+      // 模幂运算：this^e % m，用于 RSA
+      let base = this._v % _val(m);
+      let exp = _val(e);
+      let res = 1n;
+      while (exp > 0n) {
+        if (exp & 1n) res = (res * base) % _val(m);
+        exp >>= 1n;
+        base = (base * base) % _val(m);
+      }
+      return new _BI(res);
+    }
+    toString(base?: number) {
+      if (base == null || base === 10) return this._v.toString();
+      return this._v.toString(base);
+    }
+    valueOf() { return this._v; }
+    toJSON() { return this._v.toString(); }
+  }
+  function bigInt(v?: any, base?: number): any {
+    if (v instanceof _BI) return v;
+    return new _BI(v == null ? 0 : v, base);
+  }
+  bigInt.isInstance = (v: any): boolean => v instanceof _BI;
+  bigInt.min = (...a: any[]): any => a.reduce((x, y) => bigInt(x).lesser(y) ? x : y);
+  bigInt.max = (...a: any[]): any => a.reduce((x, y) => bigInt(x).greater(y) ? x : y);
+  bigInt.gcd = (a: any, b: any): any => {
+    let x = _val(a), y = _val(b);
+    while (y !== 0n) { const t = y; y = x % y; x = t; }
+    return new _BI(x < 0n ? -x : x);
+  };
+  bigInt.lcm = (a: any, b: any): any => bigInt(a).divide(bigInt.gcd(a, b)).multiply(b);
+  return bigInt;
+}
+
 export function createRequire(): (name: string) => unknown {
   return (name: string): unknown => {
     switch (name) {
@@ -637,6 +767,8 @@ export function createRequire(): (name: string) => unknown {
         };
       case 'dayjs':
         return () => ({ format: (): string => new Date().toISOString() });
+      case 'big-integer':
+        return createBigInteger();
       default:
         throw new Error('require("' + name + '") 不受支持（MusicFree 适配器仅提供 crypto-js, axios, cheerio 等常用依赖）');
     }

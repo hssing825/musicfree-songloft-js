@@ -217,16 +217,20 @@ body {
   .btn-small { height: 32px; }
 
   /* 搜索结果表（非排行榜）：隐藏"艺术家""来源平台"列，并入歌名下方副标题 */
-  .data-table.songs:not(.rank-song-table) th:nth-child(3),
-  .data-table.songs:not(.rank-song-table) td:nth-child(3),
-  .data-table.songs:not(.rank-song-table) th:nth-child(4),
-  .data-table.songs:not(.rank-song-table) td:nth-child(4) { display: none; }
-  .data-table.songs:not(.rank-song-table) thead { display: none; }
+  .data-table.songs:not(.rank-song-table):not(.hs-song-table) th:nth-child(3),
+  .data-table.songs:not(.rank-song-table):not(.hs-song-table) td:nth-child(3),
+  .data-table.songs:not(.rank-song-table):not(.hs-song-table) th:nth-child(4),
+  .data-table.songs:not(.rank-song-table):not(.hs-song-table) td:nth-child(4) { display: none; }
+  .data-table.songs:not(.rank-song-table):not(.hs-song-table) thead { display: none; }
   /* 排行榜详情表（有复选框+封面列）：隐藏艺术家和来源列 */
   .data-table.rank-song-table th:nth-child(4),
   .data-table.rank-song-table td:nth-child(4),
   .data-table.rank-song-table th:nth-child(5),
-  .data-table.rank-song-table td:nth-child(5) { display: none; }
+  .data-table.rank-song-table td:nth-child(5),
+  .data-table.hs-song-table th:nth-child(4),
+  .data-table.hs-song-table td:nth-child(4),
+  .data-table.hs-song-table th:nth-child(5),
+  .data-table.hs-song-table td:nth-child(5) { display: none; }
   .data-table.songs .cell-sub { display: block; }
 
   /* 插件表：隐藏"版本""功能"列，并入平台下方副标题 */

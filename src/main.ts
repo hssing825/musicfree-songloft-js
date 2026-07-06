@@ -823,8 +823,35 @@ router.get('/recommend-sheets/tags', async () => {
       if (disabledPlugins.has(url) || typeof plugin.getRecommendSheetTags !== 'function') continue;
       try {
         const tags = await withTimeout(plugin.getRecommendSheetTags!(), PLUGIN_TIMEOUT, `getRecommendSheetTags[${plugin.platform}]`);
-        if (Array.isArray(tags) && tags.length > 0) {
-          tagsByPlatform.push({ platform: plugin.platform, tags });
+        // 部分插件返回嵌套对象而非 string[]，尝试提取
+        let normalizedTags: string[] = [];
+        if (Array.isArray(tags)) {
+          // 已经是 string[]，直接保留
+          normalizedTags = tags.filter((t: any) => typeof t === 'string');
+        } else if (tags && typeof tags === 'object') {
+          // 可能是 { data: [{ title, data: [{ title }] }], pinned: [{ title }] }
+          const extract = (list: any[]): string[] =>
+            (list || []).map((item: any) => item.title || item.name || item.id || String(item)).filter(Boolean);
+          if (Array.isArray(tags.data) || Array.isArray(tags.pinned)) {
+            // 提取 pinned
+            if (Array.isArray(tags.pinned)) normalizedTags.push(...extract(tags.pinned));
+            // 提取 data 中每个子组的 title
+            if (Array.isArray(tags.data)) {
+              for (const group of tags.data) {
+                if (Array.isArray(group.data)) normalizedTags.push(...extract(group.data));
+                else normalizedTags.push(...extract([group]));
+              }
+            }
+          } else {
+            songloft.log.warn(`getRecommendSheetTags[${plugin.platform}] returned unknown object: ${JSON.stringify(tags).substring(0, 200)}`);
+          }
+        } else {
+          songloft.log.warn(`getRecommendSheetTags[${plugin.platform}] returned unexpected type=${typeof tags}`);
+        }
+        // 去重并过滤空值
+        normalizedTags = [...new Set(normalizedTags.filter(Boolean))];
+        if (normalizedTags.length > 0) {
+          tagsByPlatform.push({ platform: plugin.platform, tags: normalizedTags });
         }
       } catch (error) {
         songloft.log.warn(`getRecommendSheetTags failed for ${plugin.platform}: ${error}`);
@@ -842,6 +869,7 @@ router.get('/recommend-sheets/list', async (req) => {
     const platform = queryParams['platform'];
     const tag = queryParams['tag'];
     const pageStr = queryParams['page'] || '1';
+    const pageSize = Math.min(50, Math.max(1, parseInt(queryParams['pageSize'] || '20', 10) || 20));
 
     if (!platform || !tag) {
       return jsonResponse({ error: 'platform and tag are required' }, 400);
@@ -861,9 +889,53 @@ router.get('/recommend-sheets/list', async (req) => {
       return jsonResponse({ isEnd: true, sheets: [] });
     }
 
+    const allSheets = result.data;
+    const hasMore = allSheets.length > pageSize;
+    const sheets = allSheets.slice(0, pageSize).map((item: any) => ({ ...item, platform }));
+
     return jsonResponse({
-      isEnd: result.isEnd !== false,
-      sheets: result.data.map((item: any) => ({ ...item, platform })),
+      isEnd: hasMore ? false : (result.isEnd !== false),
+      sheets,
+    });
+  } catch (error) {
+    return jsonResponse({ error: String(error) }, 500);
+  }
+});
+
+router.get('/recommend-sheets/detail', async (req) => {
+  try {
+    const queryParams = parseQuery(req.query || '');
+    const platform = queryParams['platform'];
+    const id = queryParams['id'];
+    const pageStr = queryParams['page'] || '1';
+    const pageSize = Math.min(50, Math.max(1, parseInt(queryParams['pageSize'] || '20', 10) || 20));
+
+    if (!platform || !id) {
+      return jsonResponse({ error: 'platform and id are required' }, 400);
+    }
+
+    const page = Math.max(1, parseInt(pageStr, 10) || 1);
+    const plugin = Array.from(installedPlugins.values()).find(p => p.platform === platform);
+    if (!plugin) {
+      return jsonResponse({ error: 'Plugin not found' }, 404);
+    }
+    if (typeof plugin.getMusicSheetInfo !== 'function') {
+      return jsonResponse({ error: 'Plugin does not support getMusicSheetInfo' }, 400);
+    }
+
+    const sheet: MusicSheetItem = { id, title: '', platform };
+    const result = await withTimeout(plugin.getMusicSheetInfo(sheet, page), PLUGIN_TIMEOUT, `getMusicSheetInfo[${platform}]`);
+    if (!result || !Array.isArray(result.musicList)) {
+      return jsonResponse({ isEnd: true, songs: [] });
+    }
+
+    const allSongs = result.musicList;
+    const hasMore = allSongs.length > pageSize;
+    const songs = allSongs.slice(0, pageSize).map((item: any) => ({ ...item, platform }));
+
+    return jsonResponse({
+      isEnd: hasMore ? false : (result.isEnd !== false),
+      songs,
     });
   } catch (error) {
     return jsonResponse({ error: String(error) }, 500);

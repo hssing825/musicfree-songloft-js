@@ -537,9 +537,15 @@
 
   window.importToSongloft = function (idx, rowId) {
     var fromRank = rowId && rowId.indexOf('rank-song-') === 0;
-    var item = fromRank
-      ? (window._rankSongs && window._rankSongs[idx] ? window._rankSongs[idx] : lastResults[idx])
-      : (lastResults[idx] ? lastResults[idx] : (window._rankSongs && window._rankSongs[idx]));
+    var fromHs = rowId && rowId.indexOf('hs-song-') === 0;
+    var item;
+    if (fromRank) {
+      item = window._rankSongs && window._rankSongs[idx] ? window._rankSongs[idx] : lastResults[idx];
+    } else if (fromHs) {
+      item = window._hsSongs && window._hsSongs[idx] ? window._hsSongs[idx] : lastResults[idx];
+    } else {
+      item = lastResults[idx] ? lastResults[idx] : (window._rankSongs && window._rankSongs[idx]);
+    }
     if (!item) return;
     _pickerState.idx = idx;
     _pickerState.rowId = rowId;
@@ -620,9 +626,15 @@
     closePlaylistModal();
 
     var fromRank = rowId && rowId.indexOf('rank-song-') === 0;
-    var item = fromRank
-      ? (window._rankSongs && window._rankSongs[idx] ? window._rankSongs[idx] : lastResults[idx])
-      : (lastResults[idx] ? lastResults[idx] : (window._rankSongs && window._rankSongs[idx]));
+    var fromHs = rowId && rowId.indexOf('hs-song-') === 0;
+    var item;
+    if (fromRank) {
+      item = window._rankSongs && window._rankSongs[idx] ? window._rankSongs[idx] : lastResults[idx];
+    } else if (fromHs) {
+      item = window._hsSongs && window._hsSongs[idx] ? window._hsSongs[idx] : lastResults[idx];
+    } else {
+      item = lastResults[idx] ? lastResults[idx] : (window._rankSongs && window._rankSongs[idx]);
+    }
     if (!item) return;
     var btn = rowId ? document.querySelector('#' + rowId + ' .btn-import') : null;
 
@@ -1379,7 +1391,7 @@
       if (group.tag) {
         html += '<div class="rank-group-title">' + escapeHtml(group.tag) + '</div>';
       }
-      html += '<div class="rank-grid">';
+      html += '<div class="rank-grid" id="hs-grid-' + escapeHtml(group.tag).replace(/\s/g, '_') + '">';
       (group.items || []).forEach(function (item) {
         var safeName = escapeHtml(item.title || '未知');
         var safeDesc = escapeHtml(item.description || '');
@@ -1393,6 +1405,11 @@
           '<div class="rank-card-body"><h3>' + safeName + '</h3><p>' + safeDesc + '</p></div></div>';
       });
       html += '</div>';
+      // 加载更多按钮
+      var tagState = _hsTagCtx[group.tag];
+      if (tagState && !tagState.isEnd) {
+        html += '<div id="hs-more-' + escapeHtml(group.tag).replace(/\s/g, '_') + '" class="empty-state" style="cursor:pointer;color:var(--primary)" onclick="loadMoreHotSheetTag(\'' + escapeHtml(group.platform) + '\',\'' + escapeHtml(group.tag).replace(/'/g, "\\'") + '\')">点击加载更多</div>';
+      }
     });
     hsListEl.innerHTML = html;
   }
@@ -1402,6 +1419,7 @@
     hsListEl.style.display = '';
     hsListEl.innerHTML = '<div class="empty-state">加载中...</div>';
     hsTagsEl.innerHTML = '';
+    _hsTagCtx = {};
     ajax('GET', '/recommend-sheets/tags', null, function (err, data) {
       if (err || !data) {
         hsListEl.innerHTML = '<div class="message error-message">加载失败</div>';
@@ -1437,24 +1455,87 @@
     });
   }
 
+  var _hsTagCtx = {};
+
   function loadHotSheetTag(platform, tags) {
     hsListEl.innerHTML = '<div class="empty-state">加载中...</div>';
     allHotSheetGroups = [];
+    _hsTagCtx = {};
     if (!tags || tags.length === 0) {
       hsListEl.innerHTML = '<div class="empty-state">该平台暂无热门歌单</div>';
       return;
     }
     var done = 0;
     tags.forEach(function (tag) {
-      ajax('GET', '/recommend-sheets/list?platform=' + encodeURIComponent(platform) + '&tag=' + encodeURIComponent(tag) + '&page=1', null, function (err, data) {
+      _hsTagCtx[tag] = { page: 1, isEnd: false, loading: false };
+      ajax('GET', '/recommend-sheets/list?platform=' + encodeURIComponent(platform) + '&tag=' + encodeURIComponent(tag) + '&page=1&pageSize=20', null, function (err, data) {
         done++;
         if (!err && data && Array.isArray(data.sheets) && data.sheets.length > 0) {
           allHotSheetGroups.push({ platform: platform, tag: tag, items: data.sheets });
+          if (data.isEnd === false) {
+            _hsTagCtx[tag].page = 2;
+          } else {
+            _hsTagCtx[tag].isEnd = true;
+          }
         }
         if (done >= tags.length) {
           renderHotSheetGroups(platform);
         }
       });
+    });
+  }
+
+  window.loadMoreHotSheetTag = function (platform, tag) {
+    var state = _hsTagCtx[tag];
+    if (!state || state.isEnd || state.loading) return;
+    state.loading = true;
+    var moreEl = document.getElementById('hs-more-' + escapeHtml(tag).replace(/\s/g, '_'));
+    if (moreEl) moreEl.textContent = '加载中...';
+    ajax('GET', '/recommend-sheets/list?platform=' + encodeURIComponent(platform) + '&tag=' + encodeURIComponent(tag) + '&page=' + state.page + '&pageSize=20', null, function (err, data) {
+      state.loading = false;
+      if (err || !data) {
+        if (moreEl) moreEl.textContent = '加载失败，点击重试';
+        return;
+      }
+      var sheets = data.sheets || [];
+      if (sheets.length === 0) {
+        state.isEnd = true;
+        if (moreEl) moreEl.remove();
+        return;
+      }
+      if (data.isEnd === false) {
+        state.page++;
+      } else {
+        state.isEnd = true;
+      }
+      // 追加卡片到对应网格
+      var gridId = 'hs-grid-' + escapeHtml(tag).replace(/\s/g, '_');
+      var grid = document.getElementById(gridId);
+      if (grid) {
+        sheets.forEach(function (item) {
+          var safeName = escapeHtml(item.title || '未知');
+          var safeDesc = escapeHtml(item.description || '');
+          var cover = item.coverImg || '';
+          var dataAttrs = 'data-platform="' + escapeHtml(item.platform || '') + '"' +
+            ' data-id="' + escapeHtml(item.id || '') + '"' +
+            ' data-title="' + safeName + '"';
+          var card = document.createElement('div');
+          card.className = 'rank-card';
+          card.setAttribute('onclick', 'openHotSheet(this)');
+          card.setAttribute('data-platform', item.platform || '');
+          card.setAttribute('data-id', item.id || '');
+          card.setAttribute('data-title', item.title || '');
+          card.innerHTML = '<img class="rank-card-cover" src="' + (cover || '') + '" alt="' + safeName + '" onerror="this.style.display=\'none\';this.nextSibling.style.display=\'flex\'" />' +
+            '<div class="rank-card-cover rank-card-cover-fallback" style="display:' + (cover ? 'none' : 'flex') + ';background:linear-gradient(135deg,#e74c3c,#f39c12);font-size:40px;color:rgba(255,255,255,.9)">📋</div>' +
+            '<div class="rank-card-body"><h3>' + safeName + '</h3><p>' + safeDesc + '</p></div>';
+          grid.appendChild(card);
+        });
+      }
+      if (state.isEnd) {
+        if (moreEl) moreEl.remove();
+      } else {
+        if (moreEl) moreEl.textContent = '点击加载更多';
+      }
     });
   }
 
@@ -1468,6 +1549,23 @@
     hsListEl.style.display = 'none';
     hsDetailEl.style.display = '';
     hsDetailTitle.textContent = title || '歌单详情';
+
+    var oldBatchBtn = document.getElementById('hs-batch-import-btn');
+    if (!oldBatchBtn) {
+      var hdr = document.querySelector('#hs-detail .rank-detail-header');
+      if (hdr) {
+        var bBtn = document.createElement('button');
+        bBtn.className = 'btn btn-small btn-import';
+        bBtn.id = 'hs-batch-import-btn';
+        bBtn.textContent = '批量导入';
+        bBtn.onclick = batchImportHsSongs;
+        bBtn.style.cssText = 'display:none;margin-left:auto';
+        hdr.appendChild(bBtn);
+      }
+    } else {
+      oldBatchBtn.style.display = 'none';
+    }
+
     hsDetailSongs.innerHTML = '<div class="empty-state">加载中...</div>';
     window._hsSongs = [];
     _loadHsPage(true);
@@ -1481,48 +1579,306 @@
       hsDetailSongs.innerHTML = '<div class="empty-state">加载中...</div>';
       window._hsSongs = [];
       hsCtx.page = 1;
+    } else {
+      var loader = document.getElementById('hs-load-more');
+      if (loader) loader.textContent = '加载中...';
     }
-    var params = 'platform=' + encodeURIComponent(hsCtx.platform) + '&tag=' + encodeURIComponent(hsCtx.id) + '&page=' + hsCtx.page;
-    ajax('GET', '/recommend-sheets/list?' + params, null, function (err, data) {
+    var params = 'platform=' + encodeURIComponent(hsCtx.platform) + '&id=' + encodeURIComponent(hsCtx.id) + '&page=' + hsCtx.page + '&pageSize=20';
+    ajax('GET', '/recommend-sheets/detail?' + params, null, function (err, data) {
       hsCtx.loading = false;
       if (err || !data) {
         if (reset) hsDetailSongs.innerHTML = '<div class="message error-message">加载失败</div>';
         return;
       }
-      var sheets = data.sheets || [];
+      var songs = data.songs || [];
       var isEnd = data.isEnd !== false;
-      if (sheets.length === 0 && reset) {
+      if (songs.length === 0 && reset) {
         hsDetailSongs.innerHTML = '<div class="empty-state">该歌单暂无内容</div>';
         return;
       }
-      if (sheets.length === 0) { hsCtx.isEnd = true; return; }
+      if (songs.length === 0) { hsCtx.isEnd = true; return; }
       hsCtx.isEnd = isEnd;
       hsCtx.page++;
-      var list = reset ? [] : window._hsSongs;
-      Array.prototype.push.apply(list, sheets);
-      window._hsSongs = list;
+      var allSongs = reset ? [] : window._hsSongs;
+      var startIdx = allSongs.length;
+      var html = '';
       if (reset) {
-        var html = '<div class="rank-grid">';
-        sheets.forEach(function (item) {
-          var safeName = escapeHtml(item.title || '未知');
-          var cover = item.coverImg || '';
-          var dataAttrs = 'data-platform="' + escapeHtml(item.platform || '') + '"' +
-            ' data-id="' + escapeHtml(item.id || '') + '"' +
-            ' data-title="' + safeName + '"';
-          html += '<div class="rank-card" onclick="openHotSheet(this)" ' + dataAttrs + '>' +
-            '<img class="rank-card-cover" src="' + (cover || '') + '" alt="' + safeName + '" onerror="this.style.display=\'none\';this.nextSibling.style.display=\'flex\'" />' +
-            '<div class="rank-card-cover rank-card-cover-fallback" style="display:' + (cover ? 'none' : 'flex') + ';background:linear-gradient(135deg,#e74c3c,#f39c12);font-size:40px;color:rgba(255,255,255,.9)">📋</div>' +
-            '<div class="rank-card-body"><h3>' + safeName + '</h3></div></div>';
-        });
-        html += '</div>';
+        html = '<div class="table-wrap"><table class="data-table songs hs-song-table"><thead><tr>' +
+          '<th style="width:36px"><input type="checkbox" id="hs-select-all" onchange="toggleAllHsSongs(this.checked)" /></th>' +
+          '<th class="col-cover"></th><th>歌曲名</th><th>艺术家</th><th class="col-platform">来源</th><th></th></tr></thead><tbody>';
+      }
+      songs.forEach(function (item, i) {
+        var idx = startIdx + i;
+        var artist = Array.isArray(item.artist) ? item.artist.join(', ') : (item.artist || '');
+        var cover = item.artwork || '';
+        var coverHtml = cover
+          ? '<img class="song-cover" src="' + escapeHtml(cover) + '" alt="" loading="lazy" onerror="this.style.display=\'none\';this.nextSibling.style.display=\'inline-flex\'" /><span class="song-cover-fallback" style="display:none">♫</span>'
+          : '<span class="song-cover-fallback">♫</span>';
+        html += '<tr id="hs-song-' + idx + '">' +
+          '<td style="width:36px"><input type="checkbox" class="hs-song-cb" data-idx="' + idx + '" onchange="updateHsBatchBtn()" /></td>' +
+          '<td class="col-cover">' + coverHtml + '</td>' +
+          '<td><div class="cell-title">' + escapeHtml(item.title) + '</div>' +
+            '<div class="cell-sub">' + escapeHtml(artist) + ' · ' + escapeHtml(item.platform) + '</div></td>' +
+          '<td>' + escapeHtml(artist) + '</td>' +
+          '<td class="col-platform">' + escapeHtml(item.platform) + '</td>' +
+          '<td class="col-op">' +
+            '<button class="btn btn-small btn-primary btn-play" onclick="playHsSong(' + idx + ')" style="margin-right:4px">播放</button>' +
+            '<button class="btn btn-small btn-import" onclick="importToSongloft(' + idx + ',\'hs-song-' + idx + '\')">导入</button></td></tr>';
+      });
+      Array.prototype.push.apply(allSongs, songs);
+      window._hsSongs = allSongs;
+
+      if (reset) {
+        html += '</tbody></table></div>';
         hsDetailSongs.innerHTML = html;
+      } else {
+        var tbody = document.querySelector('.hs-song-table tbody');
+        if (tbody) tbody.insertAdjacentHTML('beforeend', html);
+      }
+      updateHsBatchBtn();
+      // 加载更多按钮
+      var moreEl = document.getElementById('hs-load-more');
+      if (!isEnd) {
+        var moreHtml = '<div id="hs-load-more" class="empty-state" style="cursor:pointer;color:var(--primary)" onclick="loadMoreHsSongs()">点击加载更多</div>';
+        if (reset) {
+          hsDetailSongs.insertAdjacentHTML('beforeend', moreHtml);
+        } else {
+          if (moreEl) moreEl.textContent = '点击加载更多';
+          else hsDetailSongs.insertAdjacentHTML('beforeend', moreHtml);
+        }
+      } else {
+        if (moreEl) moreEl.remove();
       }
     });
+  }
+
+  window.playHsSong = function (idx) {
+    var songs = window._hsSongs;
+    if (!songs || !songs[idx]) return;
+    lastResults = songs;
+    currentIdx = idx;
+    resolveAndPlay(songs[idx], defaultQuality);
+  }
+
+  window.toggleAllHsSongs = function (checked) {
+    var cbs = document.querySelectorAll('.hs-song-cb');
+    cbs.forEach(function (cb) { cb.checked = checked; });
+    updateHsBatchBtn();
+  };
+
+  window.updateHsBatchBtn = function () {
+    var checked = document.querySelectorAll('.hs-song-cb:checked');
+    var btn = document.getElementById('hs-batch-import-btn');
+    if (btn) {
+      btn.style.display = '';
+      btn.textContent = checked.length > 0 ? ('批量导入 (' + checked.length + ')') : '批量导入 (全部)';
+    }
+  };
+
+  window.loadMoreHsSongs = function () {
+    _loadHsPage(false);
+  };
+
+  window.batchImportHsSongs = function () {
+    var btn = document.getElementById('hs-batch-import-btn');
+    var checked = document.querySelectorAll('.hs-song-cb:checked');
+    if (checked.length > 0) {
+      var indices = [];
+      checked.forEach(function (cb) { indices.push(parseInt(cb.getAttribute('data-idx'), 10)); });
+      _showHsBatchPickerWithIndices(indices);
+    } else {
+      if (!hsCtx.isEnd) {
+        if (btn) btn.textContent = '加载全部歌曲...';
+        _loadAllHsPages(function () {
+          if (btn) btn.textContent = '批量导入';
+          var allIndices = [];
+          for (var i = 0; i < (window._hsSongs || []).length; i++) allIndices.push(i);
+          document.querySelectorAll('.hs-song-cb').forEach(function (cb) { cb.checked = true; });
+          updateHsBatchBtn();
+          _showHsBatchPickerWithIndices(allIndices);
+        });
+      } else {
+        var allIndices = [];
+        for (var i = 0; i < (window._hsSongs || []).length; i++) allIndices.push(i);
+        _showHsBatchPickerWithIndices(allIndices);
+      }
+    }
+  };
+
+  function _loadAllHsPages(cb) {
+    if (hsCtx.isEnd || hsCtx.loading) { if (cb) cb(); return; }
+    hsCtx.loading = true;
+    var params = 'platform=' + encodeURIComponent(hsCtx.platform) + '&id=' + encodeURIComponent(hsCtx.id) + '&page=' + hsCtx.page + '&pageSize=20';
+    ajax('GET', '/recommend-sheets/detail?' + params, null, function (err, data) {
+      hsCtx.loading = false;
+      if (err || !data) { if (cb) cb(); return; }
+      var songs = data.songs || [];
+      var isEnd = data.isEnd !== false;
+      if (songs.length === 0) { hsCtx.isEnd = true; if (cb) cb(); return; }
+      hsCtx.isEnd = isEnd;
+      hsCtx.page++;
+      var allSongs = window._hsSongs;
+      var startIdx = allSongs.length;
+      Array.prototype.push.apply(allSongs, songs);
+      window._hsSongs = allSongs;
+      var tbody = document.querySelector('.hs-song-table tbody');
+      if (tbody) {
+        var html = '';
+        songs.forEach(function (item, i) {
+          var idx = startIdx + i;
+          var artist = Array.isArray(item.artist) ? item.artist.join(', ') : (item.artist || '');
+          var cover = item.artwork || '';
+          var coverHtml = cover
+            ? '<img class="song-cover" src="' + escapeHtml(cover) + '" alt="" loading="lazy" onerror="this.style.display=\'none\';this.nextSibling.style.display=\'inline-flex\'" /><span class="song-cover-fallback" style="display:none">♫</span>'
+            : '<span class="song-cover-fallback">♫</span>';
+          html += '<tr id="hs-song-' + idx + '">' +
+            '<td style="width:36px"><input type="checkbox" class="hs-song-cb" data-idx="' + idx + '" onchange="updateHsBatchBtn()" checked /></td>' +
+            '<td class="col-cover">' + coverHtml + '</td>' +
+            '<td><div class="cell-title">' + escapeHtml(item.title) + '</div>' +
+              '<div class="cell-sub">' + escapeHtml(artist) + ' · ' + escapeHtml(item.platform) + '</div></td>' +
+            '<td>' + escapeHtml(artist) + '</td>' +
+            '<td class="col-platform">' + escapeHtml(item.platform) + '</td>' +
+            '<td class="col-op"><button class="btn btn-small btn-primary btn-play" onclick="playHsSong(' + idx + ')" style="margin-right:4px">播放</button>' +
+              '<button class="btn btn-small btn-import" onclick="importToSongloft(' + idx + ',\'hs-song-' + idx + '\')">导入</button></td></tr>';
+        });
+        tbody.insertAdjacentHTML('beforeend', html);
+      }
+      _loadAllHsPages(cb);
+    });
+  }
+
+  function _showHsBatchPickerWithIndices(indices) {
+    if (!indices || indices.length === 0) return;
+    var listEl = document.getElementById('playlist-list');
+    listEl.innerHTML = '<div class="empty-state">加载中...</div>';
+    document.getElementById('playlist-modal').style.display = 'flex';
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', songloftApiUrl('/api/v1/playlists'), true);
+    xhr.setRequestHeader('Accept', 'application/json');
+    xhr.onload = function () {
+      try {
+        var data = JSON.parse(xhr.responseText);
+        var playlists = data.playlists || data.data || [];
+        renderPlaylistList(playlists);
+        var origConfirm = window.confirmPlaylistImport;
+        window.confirmPlaylistImport = function () {
+          var playlistId = _pickerState.playlistId;
+          if (playlistId === 'new') {
+            var name = document.getElementById('playlist-new-name').value.trim();
+            if (!name) { alert('请输入歌单名称'); return; }
+          }
+          closePlaylistModal();
+          _runHsBatchImport(indices, playlistId);
+          window.confirmPlaylistImport = origConfirm;
+        };
+      } catch (e) {
+        listEl.innerHTML = '<div class="message error-message">加载歌单失败</div>';
+      }
+    };
+    xhr.onerror = function () {
+      listEl.innerHTML = '<div class="message error-message">网络错误</div>';
+    };
+    xhr.send();
+  }
+
+  function _runHsBatchImport(indices, playlistId) {
+    var songs = window._hsSongs;
+    if (!songs || indices.length === 0) return;
+    var total = indices.length;
+    var done = 0;
+    var allSongIds = [];
+    var importBtn = document.getElementById('hs-batch-import-btn');
+
+    function onComplete() {
+      if (importBtn) { importBtn.textContent = '已导入'; importBtn.classList.add('btn-imported'); }
+      indices.forEach(function (idx) {
+        var btn = document.querySelector('#hs-song-' + idx + ' .btn-import');
+        if (btn) { btn.textContent = '已导入'; btn.classList.add('btn-imported'); }
+      });
+      if (playlistId && allSongIds.length > 0) {
+        addSongsToPlaylist(playlistId, allSongIds);
+      }
+    }
+
+    function importOne(i) {
+      if (i >= indices.length) { onComplete(); return; }
+      var item = songs[indices[i]];
+      if (!item) { importOne(i + 1); return; }
+      if (importBtn) importBtn.textContent = '导入中 ' + (done + 1) + '/' + total;
+      var duration = normalizeDuration(item.duration);
+      var payload = [{
+        title: item.title || '',
+        artist: Array.isArray(item.artist) ? item.artist.join(', ') : (item.artist || ''),
+        album: item.album || '',
+        cover_url: item.artwork || '',
+        url: '',
+        duration: duration,
+        dedup_key: item.id ? (item.platform + ':' + item.id) : '',
+        plugin_entry_path: 'musicfree-adapter',
+        source_data: JSON.stringify(item)
+      }];
+      ajax('POST', '/lyric', { musicItem: item }, function (err, data) {
+        var lyricText = '';
+        if (!err && data && data.rawLrc) lyricText = data.rawLrc;
+        payload[0].lyric = lyricText;
+        var xhr = new XMLHttpRequest();
+        xhr.open('POST', songloftApiUrl('/api/v1/songs/remote'), true);
+        xhr.setRequestHeader('Accept', 'application/json');
+        xhr.setRequestHeader('Content-Type', 'application/json');
+        xhr.onload = function () {
+          done++;
+          try {
+            var r = JSON.parse(xhr.responseText);
+            if (xhr.status === 201 && r.count > 0 && r.songs) {
+              r.songs.forEach(function (s) { allSongIds.push(s.id); });
+            }
+          } catch (e) {}
+          importOne(i + 1);
+        };
+        xhr.onerror = function () { done++; importOne(i + 1); };
+        xhr.send(JSON.stringify(payload));
+      });
+    }
+
+    function startImport() {
+      importOne(0);
+    }
+
+    if (playlistId === 'new') {
+      if (importBtn) importBtn.textContent = '创建歌单...';
+      var name = document.getElementById('playlist-new-name').value.trim() || (songs[indices[0]] ? songs[indices[0]].title : '新歌单');
+      var createXhr = new XMLHttpRequest();
+      createXhr.open('POST', songloftApiUrl('/api/v1/playlists'), true);
+      createXhr.setRequestHeader('Accept', 'application/json');
+      createXhr.setRequestHeader('Content-Type', 'application/json');
+      createXhr.onload = function () {
+        try {
+          var pl = JSON.parse(createXhr.responseText);
+          if (createXhr.status === 201 && pl.id) {
+            playlistId = pl.id;
+            startImport();
+          } else {
+            if (importBtn) importBtn.textContent = '创建失败';
+          }
+        } catch (e) {
+          if (importBtn) importBtn.textContent = '创建失败';
+        }
+      };
+      createXhr.onerror = function () {
+        if (importBtn) importBtn.textContent = '创建失败';
+      };
+      createXhr.send(JSON.stringify({ name: name, type: 'normal' }));
+    } else {
+      startImport();
+    }
   }
 
   function hideHotSheetDetail() {
     hsDetailEl.style.display = 'none';
     hsListEl.style.display = '';
+    var batchBtn = document.getElementById('hs-batch-import-btn');
+    if (batchBtn) batchBtn.style.display = 'none';
   }
 
   document.getElementById('hs-back-btn').addEventListener('click', function () {
