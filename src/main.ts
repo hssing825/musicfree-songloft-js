@@ -193,6 +193,12 @@ function loadPluginFromCode(code: string, url: string): LoadResult {
       "'artistId':$1$2,'duration':$1['duration']||0}"
     );
 
+    // 补丁：移除 元力KW 插件的歌单相关函数导出（数据量太大导致加载缓慢）
+    processedCode = processedCode.replace(
+      /,'importMusicSheet':importMusicSheet,'getRecommendSheetTags':getRecommendSheetTags,'getRecommendSheetsByTag':getRecommendSheetsByTag,'getMusicSheetInfo':getMusicSheetInfo/g,
+      ''
+    );
+
     // 构建 MusicFree 运行时依赖
     const moduleObj = { exports: {} as any };
     const requireFn = createRequire();

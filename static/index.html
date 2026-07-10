@@ -36,7 +36,14 @@
           <button id="search-btn" class="btn btn-primary">搜索</button>
         </div>
       </div>
-      <div id="search-results-wrap">
+      <div id="hot-songs" class="card" style="display:none">
+        <h2>热门歌曲</h2>
+        <div id="hot-songs-grid" class="hot-songs-grid"></div>
+      </div>
+      <div id="search-results-wrap" style="display:none">
+        <div class="search-back-bar">
+          <button id="search-back-btn" class="btn btn-small">← 返回热门歌曲</button>
+        </div>
         <div id="search-results">
           <div class="empty-state">输入关键词开始搜索</div>
         </div>

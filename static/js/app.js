@@ -54,7 +54,14 @@
     });
     if (name === 'rank') loadRankLists();
     if (name === 'hotsheet') loadHotSheetLists();
-    if (name === 'home') { hideRankDetail(); hideHotSheetDetail(); }
+    if (name === 'home') {
+      hideRankDetail();
+      hideHotSheetDetail();
+      hotSongsEl.style.display = '';
+      searchResultsWrap.style.display = 'none';
+      searchState.end = true;
+      loadHotSongs();
+    }
   }
   navTabs.forEach(function (tab) {
     tab.addEventListener('click', function () {
@@ -445,6 +452,84 @@
     reader.readAsText(selectedFile);
   };
 
+  // --- Hot songs (cached, 5min TTL) ---
+  var hotSongsEl = document.getElementById('hot-songs');
+  var hotSongsGrid = document.getElementById('hot-songs-grid');
+  var searchBackBtn = document.getElementById('search-back-btn');
+  var searchResultsWrap = document.getElementById('search-results-wrap');
+  var _hotCache = { songs: null, ts: 0 };
+
+  function loadHotSongs(force) {
+    if (!force && _hotCache.songs && Date.now() - _hotCache.ts < 300000) {
+      hotSongsGrid.innerHTML = _hotCache.html;
+      window._hotSongs = _hotCache.songs;
+      hotSongsEl.style.display = _hotCache.songs.length ? '' : 'none';
+      return;
+    }
+    hotSongsGrid.innerHTML = '<div class="empty-state" style="padding:12px">加载中...</div>';
+    hotSongsEl.style.display = '';
+    ajax('GET', '/top-lists', null, function (err, data) {
+      if (err || !data) {
+        if (!_hotCache.songs) hotSongsEl.style.display = 'none';
+        return;
+      }
+      var groups = data.groups || [];
+      if (groups.length === 0 || !groups[0].items || groups[0].items.length === 0) {
+        if (!_hotCache.songs) hotSongsEl.style.display = 'none';
+        return;
+      }
+      var firstGroup = groups[0];
+      var firstItem = firstGroup.items[0];
+      var platform = firstGroup.platform;
+      var id = firstItem.id;
+      ajax('GET', '/top-list-detail?platform=' + encodeURIComponent(platform) + '&id=' + encodeURIComponent(id) + '&page=1', null, function (err2, data2) {
+        if (err2 || !data2) {
+          if (!_hotCache.songs) hotSongsEl.style.display = 'none';
+          return;
+        }
+        var songs = (data2.songs || []).slice(0, 20);
+        if (songs.length === 0) {
+          if (!_hotCache.songs) hotSongsEl.style.display = 'none';
+          return;
+        }
+        var html = '';
+        songs.forEach(function (item, i) {
+          var artist = Array.isArray(item.artist) ? item.artist.join(', ') : (item.artist || '');
+          var cover = item.artwork || '';
+          var coverHtml = cover
+            ? '<img class="hot-song-cover" src="' + escapeHtml(cover) + '" alt="" loading="lazy" onerror="this.style.display=\'none\';this.nextSibling.style.display=\'inline-flex\'" /><span class="song-cover-fallback" style="display:none">♫</span>'
+            : '<span class="song-cover-fallback">♫</span>';
+          html += '<div class="hot-song-item" onclick="searchHotSong(' + i + ')" title="点击搜索该歌曲">' +
+            coverHtml +
+            '<div class="hot-song-info">' +
+              '<div class="hot-song-title">' + escapeHtml(item.title) + '</div>' +
+              '<div class="hot-song-artist">' + escapeHtml(artist) + '</div>' +
+            '</div>' +
+          '</div>';
+        });
+        _hotCache.songs = songs;
+        _hotCache.html = html;
+        _hotCache.ts = Date.now();
+        hotSongsGrid.innerHTML = html;
+        window._hotSongs = songs;
+        hotSongsEl.style.display = '';
+      });
+    });
+  }
+
+  window.searchHotSong = function (idx) {
+    var songs = window._hotSongs;
+    if (!songs || !songs[idx]) return;
+    searchKeyword.value = songs[idx].title;
+    startSearch();
+  };
+
+  searchBackBtn.addEventListener('click', function () {
+    hotSongsEl.style.display = '';
+    searchResultsWrap.style.display = 'none';
+    searchState.end = true;
+  });
+
   // --- Search with pagination ---
   var searchBtn = document.getElementById('search-btn');
   var searchKeyword = document.getElementById('search-keyword');
@@ -452,7 +537,7 @@
   var searchLoader = document.getElementById('search-loader');
 
   var lastResults = [];
-  var searchState = { query: '', page: 1, loading: false, end: false };
+  var searchState = { query: '', page: 1, loading: false, end: true };
 
   function songloftApiUrl(path) {
     var auth = JSON.parse(localStorage.getItem('songloft-auth') || '{}');
@@ -745,6 +830,8 @@
       searchResults.innerHTML = '<div class="empty-state">请先到「设置」页面安装并启用插件，<a href="javascript:goToSettings()" style="color:var(--primary)">前往设置</a></div>';
       return;
     }
+    hotSongsEl.style.display = 'none';
+    searchResultsWrap.style.display = '';
     searchState.query = q;
     searchState.page = 1;
     searchState.loading = false;
@@ -764,6 +851,7 @@
   // 无限滚动：滚动到底部自动加载
   window.addEventListener('scroll', function () {
     if (searchState.end || searchState.loading) return;
+    if (searchResultsWrap.style.display === 'none') return;
     if (window.innerHeight + window.scrollY >= document.body.scrollHeight - 100) {
       loadSearchPage();
     }
