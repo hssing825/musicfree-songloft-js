@@ -483,7 +483,7 @@
       var firstItem = firstGroup.items[0];
       var platform = firstGroup.platform;
       var id = firstItem.id;
-      ajax('GET', '/top-list-detail?platform=' + encodeURIComponent(platform) + '&id=' + encodeURIComponent(id) + '&page=1', null, function (err2, data2) {
+      ajax('GET', '/top-list-detail?platform=' + encodeURIComponent(platform) + '&id=' + encodeURIComponent(id) + '&page=1&pageSize=50', null, function (err2, data2) {
         if (err2 || !data2) {
           if (!_hotCache.songs) hotSongsEl.style.display = 'none';
           return;
@@ -1102,7 +1102,7 @@
       if (loader) loader.textContent = '加载中...';
     }
 
-    var params = 'platform=' + encodeURIComponent(_rankCtx.platform) + '&id=' + encodeURIComponent(_rankCtx.id) + '&page=' + _rankCtx.page;
+    var params = 'platform=' + encodeURIComponent(_rankCtx.platform) + '&id=' + encodeURIComponent(_rankCtx.id) + '&page=' + _rankCtx.page + '&pageSize=50';
     if (_rankCtx.extraStr) params += '&' + _rankCtx.extraStr;
 
     ajax('GET', '/top-list-detail?' + params, null, function (err, data) {
@@ -1593,7 +1593,7 @@
       var loader = document.getElementById('hs-load-more');
       if (loader) loader.textContent = '加载中...';
     }
-    var params = 'platform=' + encodeURIComponent(hsCtx.platform) + '&id=' + encodeURIComponent(hsCtx.id) + '&page=' + hsCtx.page + '&pageSize=20';
+    var params = 'platform=' + encodeURIComponent(hsCtx.platform) + '&id=' + encodeURIComponent(hsCtx.id) + '&page=' + hsCtx.page + '&pageSize=50';
     if (hsCtx.extraStr) params += '&' + hsCtx.extraStr;
     ajax('GET', '/recommend-sheets/detail?' + params, null, function (err, data) {
       hsCtx.loading = false;
@@ -1719,8 +1719,9 @@
   function _loadAllHsPages(cb) {
     if (hsCtx.isEnd || hsCtx.loading) { if (cb) cb(); return; }
     hsCtx.loading = true;
-    var params = 'platform=' + encodeURIComponent(hsCtx.platform) + '&id=' + encodeURIComponent(hsCtx.id) + '&page=' + hsCtx.page + '&pageSize=20';
+    var params = 'platform=' + encodeURIComponent(hsCtx.platform) + '&id=' + encodeURIComponent(hsCtx.id) + '&page=' + hsCtx.page + '&pageSize=50';
     if (hsCtx.extraStr) params += '&' + hsCtx.extraStr;
+
     ajax('GET', '/recommend-sheets/detail?' + params, null, function (err, data) {
       hsCtx.loading = false;
       if (err || !data) { if (cb) cb(); return; }

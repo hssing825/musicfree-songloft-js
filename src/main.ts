@@ -966,7 +966,7 @@ router.get('/recommend-sheets/list', async (req) => {
     const platform = queryParams['platform'];
     const tag = queryParams['tag'];
     const pageStr = queryParams['page'] || '1';
-    const pageSize = Math.min(50, Math.max(1, parseInt(queryParams['pageSize'] || '20', 10) || 20));
+    const pageSize = Math.min(50, Math.max(1, parseInt(queryParams['pageSize'] || '50', 10) || 50));
 
     if (!platform || !tag) {
       return jsonResponse({ error: 'platform and tag are required' }, 400);
@@ -1037,7 +1037,7 @@ router.get('/recommend-sheets/detail', async (req) => {
     const platform = queryParams['platform'];
     const id = queryParams['id'];
     const pageStr = queryParams['page'] || '1';
-    const pageSize = Math.min(50, Math.max(1, parseInt(queryParams['pageSize'] || '20', 10) || 20));
+    const pageSize = Math.min(50, Math.max(1, parseInt(queryParams['pageSize'] || '50', 10) || 50));
 
     if (!platform || !id) {
       return jsonResponse({ error: 'platform and id are required' }, 400);
