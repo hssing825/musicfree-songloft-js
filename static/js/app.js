@@ -2230,4 +2230,8 @@
     }
     next();
   };
+
+  // 页面初始化时加载首页热门歌曲（所有 DOM 变量和函数均已定义完成后执行）
+  searchResultsWrap.style.display = 'none';
+  loadHotSongs();
 })();
