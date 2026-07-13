@@ -254,8 +254,10 @@ body {
 #gp-status { flex: none; font-size: 12px; color: var(--text-sub); min-width: 56px; }
 
 /* ===== 移动端适配 ===== */
-/* 排行榜多选导入复选框 */
-.data-table .rank-song-cb, .data-table #rank-select-all { width: 16px; height: 16px; cursor: pointer; vertical-align: middle; }
+/* 歌曲列表复选框（排行榜/热门歌单/三方歌单） */
+.data-table .rank-song-cb, .data-table #rank-select-all,
+.data-table .hs-song-cb, .data-table #hs-select-all,
+.data-table .tp-song-cb, .data-table #tp-select-all-header { width: 16px; height: 16px; cursor: pointer; vertical-align: middle; }
 
 @media (max-width: 640px) {
   body { font-size: 15px; }
@@ -274,13 +276,13 @@ body {
   .btn { height: 42px; }
   .btn-small { height: 32px; }
 
-  /* 搜索结果表（非排行榜）：隐藏"艺术家""来源平台"列，并入歌名下方副标题 */
-  .data-table.songs:not(.rank-song-table):not(.hs-song-table) th:nth-child(3),
-  .data-table.songs:not(.rank-song-table):not(.hs-song-table) td:nth-child(3),
-  .data-table.songs:not(.rank-song-table):not(.hs-song-table) th:nth-child(4),
-  .data-table.songs:not(.rank-song-table):not(.hs-song-table) td:nth-child(4) { display: none; }
-  .data-table.songs:not(.rank-song-table):not(.hs-song-table) thead { display: none; }
-  /* 排行榜详情表（有复选框+封面列）：隐藏艺术家和来源列 */
+  /* 搜索结果表（无复选框，列：封面|歌名|艺术家|平台|操作）：隐藏艺术家、平台列，并入歌名下方副标题 */
+  .data-table.songs:not(.rank-song-table):not(.hs-song-table):not(.tp-song-table) th:nth-child(3),
+  .data-table.songs:not(.rank-song-table):not(.hs-song-table):not(.tp-song-table) td:nth-child(3),
+  .data-table.songs:not(.rank-song-table):not(.hs-song-table):not(.tp-song-table) th:nth-child(4),
+  .data-table.songs:not(.rank-song-table):not(.hs-song-table):not(.tp-song-table) td:nth-child(4) { display: none; }
+  .data-table.songs:not(.rank-song-table):not(.hs-song-table):not(.tp-song-table) thead { display: none; }
+  /* 排行榜/热门歌单详情表（列：复选框|封面|歌名|艺术家|平台|操作）：隐藏艺术家、平台列 */
   .data-table.rank-song-table th:nth-child(4),
   .data-table.rank-song-table td:nth-child(4),
   .data-table.rank-song-table th:nth-child(5),
@@ -289,6 +291,10 @@ body {
   .data-table.hs-song-table td:nth-child(4),
   .data-table.hs-song-table th:nth-child(5),
   .data-table.hs-song-table td:nth-child(5) { display: none; }
+  /* 三方歌单表（列：复选框|封面|歌名|艺术家|操作）：移动端隐藏艺术家列，并入副标题；保留表头以显示全选复选框 */
+  .data-table.tp-song-table th:nth-child(4),
+  .data-table.tp-song-table td:nth-child(4) { display: none; }
+  /* 所有歌曲表显示副标题 */
   .data-table.songs .cell-sub { display: block; }
 
   /* 插件表：隐藏"版本""功能"列，并入平台下方副标题 */
@@ -533,3 +539,22 @@ body {
 .toast-message.toast-fade { opacity: 0; }
 .toast-message.toast-error { background: #c0392b; }
 .drop-zone-file { font-size: 13px; color: var(--primary); font-weight: 500; margin-top: 4px; word-break: break-all; }
+
+/* 三方歌单输入行：select 自适应内容宽度，input 填满剩余，移动端也保持同一行 */
+.tp-input-row { flex-wrap: nowrap; gap: 8px; }
+.tp-platform-select {
+  width: auto;
+  flex: 0 0 auto;
+  max-width: 96px;
+  padding: 0 28px 0 10px;
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M0 0l5 6 5-6z' fill='%236b7280'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 10px 6px;
+}
+.tp-url-input { flex: 1; min-width: 0; width: 1%; }
+@media (max-width: 640px) {
+  .tp-platform-select { max-width: 88px; padding: 0 24px 0 8px; font-size: 15px; }
+}

@@ -54,6 +54,7 @@
     });
     if (name === 'rank') loadRankLists();
     if (name === 'hotsheet') loadHotSheetLists();
+    if (name === 'thirdparty') switchToTpTab();
     if (name === 'home') {
       hideRankDetail();
       hideHotSheetDetail();
@@ -2231,6 +2232,443 @@
     }
     next();
   };
+
+  // ===== 三方歌单导入 =====
+  var tpSongs = [];
+  var tpSelectedSongs = [];
+  var _tpMatchCache = {};
+  var _tpImportState = null;
+
+  function switchToTpTab() {
+    // no-op on tab switch
+  }
+
+  // 三方平台切换：更新 placeholder 与提示
+  var tpPlatformHints = {
+    kugou: {
+      placeholder: '粘贴酷狗歌单链接或输入酷狗码（纯数字）',
+      hint: '支持酷狗概念版/标准版歌单链接，或直接输入酷狗码（纯数字）'
+    },
+    kuwo: {
+      placeholder: '粘贴酷我歌单分享链接，如 https://m.kuwo.cn/newh5app/playlist_detail/xxx',
+      hint: '支持酷我音乐歌单分享链接（如 m.kuwo.cn/newh5app/playlist_detail/xxx）'
+    },
+    netease: {
+      placeholder: '粘贴网易云歌单分享链接，如 https://music.163.com/#/playlist?id=xxx',
+      hint: '支持网易云音乐歌单分享链接（如 music.163.com/playlist?id=xxx），可直接输入歌单ID'
+    }
+  };
+  var tpPlatformEl = document.getElementById('tp-platform');
+  var tpUrlEl = document.getElementById('tp-url');
+  var tpHintEl = document.getElementById('tp-hint');
+  function updateTpPlatformUI() {
+    var p = tpPlatformEl.value || 'kugou';
+    var cfg = tpPlatformHints[p] || tpPlatformHints.kugou;
+    tpUrlEl.placeholder = cfg.placeholder;
+    if (tpHintEl) tpHintEl.textContent = cfg.hint;
+  }
+  tpPlatformEl.addEventListener('change', updateTpPlatformUI);
+  updateTpPlatformUI();
+
+  document.getElementById('tp-parse-btn').addEventListener('click', async function () {
+    var url = tpUrlEl.value.trim();
+    if (!url) { alert('请输入歌单链接'); return; }
+    var platform = tpPlatformEl.value || 'kugou';
+    var btn = document.getElementById('tp-parse-btn');
+    btn.disabled = true; btn.textContent = '解析中...';
+    try {
+      var resp = await fetch(apiUrl('/api/third-party/parse'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: url, platform: platform }) });
+      var data = await resp.json();
+      if (data.error) { alert('解析失败: ' + data.error); return; }
+      tpSongs = data.songs || [];
+      tpSelectedSongs = [];
+      _tpMatchCache = {};
+      document.getElementById('tp-list-title').textContent = data.playlistName ? ('歌曲列表 (' + data.playlistName + ') - ' + tpSongs.length + ' 首') : ('歌曲列表 (' + tpSongs.length + ' 首)');
+      renderTpSongList();
+      document.getElementById('tp-list').style.display = '';
+    } catch (e) { alert('解析失败: ' + String(e)); }
+    finally { btn.disabled = false; btn.textContent = '解析歌单'; }
+  });
+
+  document.getElementById('tp-clear-btn').addEventListener('click', function () {
+    document.getElementById('tp-url').value = '';
+    document.getElementById('tp-list').style.display = 'none';
+    tpSongs = []; tpSelectedSongs = []; _tpMatchCache = {};
+  });
+
+  function renderTpSongList() {
+    var container = document.getElementById('tp-song-list');
+    if (!tpSongs.length) { container.innerHTML = '<div class="empty-state">歌单为空</div>'; return; }
+    var html = '<div class="table-wrap"><table class="data-table songs tp-song-table"><thead><tr><th style="width:36px"><input type="checkbox" id="tp-select-all-header" onchange="toggleAllTpSongs(this.checked)" /></th><th class="col-cover"></th><th>歌曲名</th><th>艺术家</th><th></th></tr></thead><tbody>';
+    tpSongs.forEach(function (item, idx) {
+      var artist = item.singer || '';
+      var cover = item.cover || '';
+      var coverHtml = cover
+        ? '<img class="song-cover" src="' + escapeHtml(cover) + '" alt="" loading="lazy" onerror="this.style.display=\'none\';this.nextSibling.style.display=\'inline-flex\'" /><span class="song-cover-fallback" style="display:none">♫</span>'
+        : '<span class="song-cover-fallback">♫</span>';
+      var sub = escapeHtml(artist) + (item.albumName ? ' · ' + escapeHtml(item.albumName) : '');
+      var subLine = '<div class="cell-sub">' + sub + '</div>';
+      html += '<tr id="tp-row-' + idx + '">' +
+        '<td style="width:36px"><input type="checkbox" class="tp-song-cb" data-idx="' + idx + '" onchange="onTpCbChange(' + idx + ', this.checked)" /></td>' +
+        '<td class="col-cover">' + coverHtml + '</td>' +
+        '<td><div class="cell-title">' + escapeHtml(item.name || '未知') + '</div>' + subLine + '</td>' +
+        '<td>' + escapeHtml(artist) + '</td>' +
+        '<td class="col-op"><button class="btn btn-small btn-primary btn-play" onclick="playTpSong(' + idx + ', this)" style="margin-right:4px">播放</button><button class="btn btn-small btn-import" onclick="tpImportOne(' + idx + ', this)">导入</button></td></tr>';
+    });
+    html += '</tbody></table></div>';
+    container.innerHTML = html;
+    updateTpSelectedCount();
+  }
+
+  window.onTpCbChange = function (idx, checked) {
+    var song = tpSongs[idx];
+    if (checked) {
+      if (tpSelectedSongs.indexOf(song) === -1) tpSelectedSongs.push(song);
+    } else {
+      tpSelectedSongs = tpSelectedSongs.filter(function (s) { return s !== song; });
+    }
+    updateTpSelectedCount();
+  };
+
+  window.toggleAllTpSongs = function (checked) {
+    if (checked) {
+      tpSelectedSongs = tpSongs.slice();
+    } else {
+      tpSelectedSongs = [];
+    }
+    updateTpSelectedCount();
+  };
+
+  // 单曲导入：先弹窗选歌单，确认后匹配并导入
+  window.tpImportOne = function (idx, btn) {
+    var song = tpSongs[idx];
+    if (!song) return;
+    _tpImportState = { songs: [song], total: 1, matched: [], failed: [], localMatched: 0, pluginMatched: 0, localSkipped: 0, sourceButtons: [btn] };
+    showTpPlaylistPicker();
+  };
+
+  // 批量导入：先弹窗选歌单，确认后批量匹配并导入
+  document.getElementById('tp-batch-import-btn').addEventListener('click', function () {
+    var checked = document.querySelectorAll('#tp-song-list .tp-song-cb:checked');
+    if (checked.length === 0) { showToast('请先勾选歌曲', true); return; }
+    var selectedSongs = [];
+    checked.forEach(function (cb) { var idx = parseInt(cb.getAttribute('data-idx'), 10); if (tpSongs[idx]) selectedSongs.push(tpSongs[idx]); });
+    if (selectedSongs.length === 0) return;
+    // 收集对应的行按钮用于状态更新
+    var buttons = [];
+    selectedSongs.forEach(function (s) {
+      var rowIdx = tpSongs.indexOf(s);
+      var row = rowIdx >= 0 ? document.getElementById('tp-row-' + rowIdx) : null;
+      if (row) {
+        var b = row.querySelector('.btn-import');
+        if (b) buttons.push(b);
+      }
+    });
+    _tpImportState = { songs: selectedSongs, total: selectedSongs.length, matched: [], failed: [], localMatched: 0, pluginMatched: 0, localSkipped: 0, sourceButtons: buttons };
+    showTpPlaylistPicker();
+  });
+
+  function showTpPlaylistPicker() {
+    var listEl = document.getElementById('playlist-list');
+    listEl.innerHTML = '<div class="empty-state">加载中...</div>';
+    document.getElementById('playlist-modal').style.display = 'flex';
+    _pickerState.playlistId = null;
+
+    // 复用统一的歌单列表 API 与 renderPlaylistList
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', songloftApiUrl('/api/v1/playlists'), true);
+    xhr.setRequestHeader('Accept', 'application/json');
+    xhr.onload = function () {
+      try {
+        var data = JSON.parse(xhr.responseText);
+        var playlists = data.playlists || data.data || [];
+        renderPlaylistList(playlists);
+        // 默认选中"不导入歌单"
+        selectPlaylist('');
+        // 覆盖确认函数，执行三方导入后恢复
+        var origConfirm = window.confirmPlaylistImport;
+        window.confirmPlaylistImport = function () {
+          var playlistId = _pickerState.playlistId;
+          if (playlistId === 'new') {
+            var name = document.getElementById('playlist-new-name').value.trim();
+            if (!name) { alert('请输入歌单名称'); return; }
+          }
+          closePlaylistModal();
+          executeTpImport(playlistId);
+          window.confirmPlaylistImport = origConfirm;
+        };
+      } catch (e) {
+        listEl.innerHTML = '<div class="message error-message">加载歌单失败</div>';
+      }
+    };
+    xhr.onerror = function () {
+      listEl.innerHTML = '<div class="message error-message">网络错误</div>';
+    };
+    xhr.send();
+  }
+
+  function executeTpImport(playlistId) {
+    var importBtn = document.getElementById('tp-batch-import-btn');
+    var songs = _tpImportState.songs || [];
+    var total = songs.length;
+    var matched = [];
+    var failed = [];
+    var allSongIds = [];
+    var localMatched = 0, pluginMatched = 0, localSkipped = 0, done = 0;
+    var sourceButtons = _tpImportState.sourceButtons || [];
+
+    // 标记按钮为匹配/导入中
+    if (importBtn) { importBtn.disabled = true; importBtn.textContent = '匹配中...'; }
+    sourceButtons.forEach(function (b) { if (b) { b.disabled = true; b.textContent = '匹配中...'; } });
+
+    function setBtnText() {
+      if (importBtn) importBtn.textContent = (done < total ? '匹配中 ' : '导入中 ') + (Math.min(done, total)) + '/' + total;
+    }
+
+    function onComplete() {
+      // 处理新建歌单后添加歌曲
+      function finish() {
+        if (importBtn) { importBtn.disabled = false; importBtn.textContent = '批量导入'; }
+        sourceButtons.forEach(function (b) { if (b) { b.disabled = false; b.textContent = '已导入'; b.classList.add('btn-imported'); } });
+        if (targetPlaylistId && allSongIds.length > 0) {
+          addSongsToPlaylist(targetPlaylistId, allSongIds);
+        }
+        var msg = '导入完成！共 ' + total + ' 首';
+        if (localSkipped > 0) msg += '，本地已存在 ' + localSkipped + ' 首';
+        var newCount = allSongIds.length - localSkipped;
+        if (newCount > 0) msg += '，新导入 ' + newCount + ' 首';
+        if (failed.length > 0) msg += '，' + failed.length + ' 首未匹配';
+        showToast(msg);
+        tpSelectedSongs = [];
+        updateTpSelectedCount();
+        _tpImportState = null;
+      }
+
+      var targetPlaylistId = playlistId;
+      if (playlistId === 'new') {
+        var defaultName = (songs[0] && songs[0].name) ? songs[0].name : '三方歌单导入';
+        var newName = document.getElementById('playlist-new-name').value.trim() || defaultName;
+        if (importBtn) importBtn.textContent = '创建歌单...';
+        var createXhr = new XMLHttpRequest();
+        createXhr.open('POST', songloftApiUrl('/api/v1/playlists'), true);
+        createXhr.setRequestHeader('Accept', 'application/json');
+        createXhr.setRequestHeader('Content-Type', 'application/json');
+        createXhr.onload = function () {
+          try {
+            var pl = JSON.parse(createXhr.responseText);
+            if (createXhr.status === 201 && pl.id) {
+              targetPlaylistId = pl.id;
+              finish();
+            } else {
+              if (importBtn) { importBtn.disabled = false; importBtn.textContent = '批量导入'; }
+              sourceButtons.forEach(function (b) { if (b) { b.disabled = false; b.textContent = '导入'; } });
+              showToast('创建歌单失败', true);
+            }
+          } catch (e) {
+            if (importBtn) { importBtn.disabled = false; importBtn.textContent = '批量导入'; }
+            showToast('创建歌单失败', true);
+          }
+        };
+        createXhr.onerror = function () {
+          if (importBtn) { importBtn.disabled = false; importBtn.textContent = '批量导入'; }
+          showToast('创建歌单失败', true);
+        };
+        createXhr.send(JSON.stringify({ name: newName, type: 'normal' }));
+      } else {
+        finish();
+      }
+    }
+
+    // 逐首：先匹配 → 匹配到本地直接记 ID → 匹配到插件走 remote 导入 → 否则记失败
+    function processOne(i) {
+      if (i >= total) { onComplete(); return; }
+      var song = songs[i];
+      var btn = sourceButtons[i] || null;
+      setBtnText();
+      matchTpSong(song).then(function (match) {
+        done++;
+        if (!match || !match.matched) {
+          failed.push(song);
+          if (btn) { btn.disabled = false; btn.textContent = '无资源'; btn.classList.remove('btn-imported'); }
+          processOne(i + 1);
+          return;
+        }
+        matched.push({ song: song, match: match });
+        // 本地已存在：跳过创建，但如需加入歌单则记录 ID
+        if (match.source === 'local' && match.local_song_id) {
+          localSkipped++;
+          localMatched++;
+          if (playlistId && playlistId !== 'new') allSongIds.push(match.local_song_id);
+          if (btn) { btn.disabled = false; btn.textContent = '已导入'; btn.classList.add('btn-imported'); }
+          if (importBtn) importBtn.textContent = '导入中 ' + done + '/' + total;
+          processOne(i + 1);
+          return;
+        }
+        if (match.source === 'plugin') pluginMatched++;
+        else localMatched++;
+        // 需要创建歌曲
+        var item = match.source_data || { platform: 'unknown', id: '', title: match.title, artist: match.artist };
+        var payload = [{
+          title: match.title || song.name || '',
+          artist: Array.isArray(match.artist) ? match.artist.join(', ') : (match.artist || song.singer || ''),
+          album: match.album || '',
+          cover_url: match.cover_url || '',
+          url: '',
+          duration: normalizeDuration(match.duration || 0),
+          dedup_key: (item.platform && item.id) ? (item.platform + ':' + item.id) : '',
+          plugin_entry_path: 'musicfree-adapter',
+          source_data: JSON.stringify(item),
+        }];
+        if (btn) btn.textContent = '导入中...';
+        if (importBtn) importBtn.textContent = '导入中 ' + done + '/' + total;
+        ajax('POST', '/lyric', { musicItem: item }, function (err, lrcData) {
+          if (!err && lrcData && lrcData.rawLrc) payload[0].lyric = lrcData.rawLrc;
+          var xhr = new XMLHttpRequest();
+          xhr.open('POST', songloftApiUrl('/api/v1/songs/remote'), true);
+          xhr.setRequestHeader('Accept', 'application/json');
+          xhr.setRequestHeader('Content-Type', 'application/json');
+          xhr.onload = function () {
+            try {
+              var r = JSON.parse(xhr.responseText);
+              if (xhr.status === 201 && r.songs) r.songs.forEach(function (s) { allSongIds.push(s.id); });
+              if (btn) { btn.disabled = false; btn.textContent = '已导入'; btn.classList.add('btn-imported'); }
+            } catch (e) {
+              if (btn) { btn.disabled = false; btn.textContent = '导入'; }
+            }
+            processOne(i + 1);
+          };
+          xhr.onerror = function () {
+            if (btn) { btn.disabled = false; btn.textContent = '导入'; }
+            processOne(i + 1);
+          };
+          xhr.send(JSON.stringify(payload));
+        });
+      }).catch(function () {
+        done++;
+        failed.push(song);
+        if (btn) { btn.disabled = false; btn.textContent = '失效'; }
+        processOne(i + 1);
+      });
+    }
+
+    processOne(0);
+  }
+
+  // 播放三方歌单歌曲：匹配后通过全局 gp-audio 播放，复用底部播放器 UI
+  window.playTpSong = async function (idx, btn) {
+    var song = tpSongs[idx];
+    if (!song) return;
+    window._tpSongs = tpSongs;
+    btn.textContent = '搜索中...'; btn.disabled = true;
+    setStatus('解析中...');
+    player.classList.add('active');
+    gpTitle.textContent = song.name || '未知';
+    gpArtist.textContent = song.singer || '';
+    gpCover.src = song.cover || '';
+    gpLyric.textContent = '';
+    lrcLines = [];
+    // 清除其他页面的行高亮，高亮当前行
+    var prev = document.querySelector('.row-playing');
+    if (prev) prev.classList.remove('row-playing');
+    var tpRow = document.getElementById('tp-row-' + idx);
+    if (tpRow) tpRow.classList.add('row-playing');
+    try {
+      var match = await matchTpSong(song);
+      if (!match || !match.matched) {
+        btn.textContent = '无资源'; btn.disabled = false;
+        setStatus('无法获取播放资源');
+        return;
+      }
+      // 构造标准 musicItem，追加到 lastResults 以支持音质切换
+      // 本地匹配且 source_data 有效（带插件 platform/id）→ 走 resolveAndPlay（通过插件 getMediaSource 解析）
+      // 本地匹配但无有效 source_data、或插件匹配后需通过 external 搜索 → 走 external/search 获取直链
+      var srcItem = match.source_data;
+      var canResolve = (match.source !== 'local' || match.playable !== false) && srcItem && srcItem.platform && srcItem.id && srcItem.platform !== 'local';
+      var playItem;
+      if (canResolve) {
+        playItem = {
+          platform: srcItem.platform,
+          id: srcItem.id,
+          title: match.title || song.name || srcItem.title || '未知',
+          artist: match.artist || song.singer || srcItem.artist || '',
+          artwork: match.cover_url || srcItem.artwork || '',
+          album: match.album || srcItem.album || '',
+          qualities: srcItem.qualities
+        };
+        lastResults = [playItem];
+        currentIdx = 0;
+        btn.textContent = '播放'; btn.disabled = false;
+        resolveAndPlay(playItem, defaultQuality);
+        return;
+      }
+      // 无有效插件 source_data：走 external/search 获取直链
+      var keyword = (match.title || '') + ' ' + (match.artist || '');
+      var resp = await fetch(apiUrl('/external/search'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ keyword: keyword.trim(), hint: { title: match.title, artist: match.artist, duration: match.duration } }) });
+      var data = await resp.json();
+      if (data.code !== 0 || !data.data || !data.data.url) {
+        btn.textContent = '无资源'; btn.disabled = false;
+        setStatus('无法获取播放地址');
+        return;
+      }
+      playItem = {
+        platform: data.data.platform || 'external',
+        id: data.data.id || ('tp-' + idx),
+        title: data.data.title || match.title || song.name,
+        artist: data.data.artist || match.artist || song.singer,
+        artwork: data.data.artwork || match.cover_url || '',
+        album: data.data.album || match.album || ''
+      };
+      gpTitle.textContent = playItem.title;
+      gpArtist.textContent = playItem.artist;
+      if (playItem.artwork) gpCover.src = playItem.artwork;
+      else if (match.cover_url) gpCover.src = match.cover_url;
+      setStatus('播放中');
+      gpAudio.src = data.data.url;
+      var p2 = gpAudio.play();
+      if (p2 && p2.catch) { p2.catch(function () { setStatus('点击播放按钮开始'); }); }
+      btn.textContent = '播放中'; btn.disabled = false;
+      // 直链不支持重解析，记录当前项供显示用
+      lastResults = [playItem];
+      currentIdx = 0;
+      // 尝试获取歌词（本地匹配的歌曲可能通过 source_data 查到歌词）
+      if (srcItem && srcItem.platform && srcItem.id) {
+        fetchLyric(srcItem);
+      }
+    } catch (e) {
+      btn.textContent = '失效'; btn.disabled = false;
+      setStatus('播放失败');
+    }
+  };
+
+  // 匹配单曲（先本地再插件）
+  async function matchTpSong(song) {
+    var cacheKey = (song.name || '') + '|' + (song.singer || '');
+    if (_tpMatchCache[cacheKey]) return _tpMatchCache[cacheKey];
+    try {
+      var resp = await fetch(apiUrl('/api/third-party/match'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: song.name || '', singer: song.singer || '' }) });
+      var data = await resp.json();
+      if (data.matched) data.songName = song.name;
+      _tpMatchCache[cacheKey] = data;
+      return data;
+    } catch { return null; }
+  }
+
+  function updateTpSelectedCount() {
+    // 同步选中状态到复选框
+    var cbs = document.querySelectorAll('.tp-song-cb');
+    var checkedCount = 0;
+    cbs.forEach(function (cb) {
+      var idx = parseInt(cb.getAttribute('data-idx'), 10);
+      var song = tpSongs[idx];
+      var isSelected = tpSelectedSongs.indexOf(song) !== -1;
+      cb.checked = isSelected;
+      if (isSelected) checkedCount++;
+    });
+    var allCb = document.getElementById('tp-select-all-header');
+    if (allCb) allCb.checked = cbs.length > 0 && checkedCount === cbs.length;
+    var btn = document.getElementById('tp-batch-import-btn');
+    if (btn) btn.textContent = checkedCount > 0 ? ('批量导入 (' + checkedCount + ')') : '批量导入';
+  }
 
   // 页面初始化时加载首页热门歌曲（所有 DOM 变量和函数均已定义完成后执行）
   searchResultsWrap.style.display = 'none';

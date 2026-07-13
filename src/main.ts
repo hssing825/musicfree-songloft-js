@@ -1466,6 +1466,629 @@ router.put('/subscriptions', async (req) => {
   }
 });
 
+// ===== 三方歌单导入：酷狗歌单解析 =====
+
+interface KugouPlaylistParams {
+  global_collection_id: string;
+  specialid: string;
+  platform?: 'concept' | 'standard' | 'kucode';
+  kucode?: string;
+}
+
+function extractKugouParams(text: string): KugouPlaylistParams {
+  const params: KugouPlaylistParams = { global_collection_id: '', specialid: '0' };
+  let decoded = text;
+  try { decoded = decodeURIComponent(text); } catch {}
+  try { decoded = decodeURIComponent(decoded); } catch {}
+  const searchText = decoded + ' ' + text;
+  const trimmed = text.trim();
+  if (/^\d{7,12}$/.test(trimmed)) { params.kucode = trimmed; params.platform = 'kucode'; return params; }
+  const kucodeMatch = searchText.match(/酷狗码[：: ]\s*(\d{7,12})/);
+  if (kucodeMatch) { params.kucode = kucodeMatch[1]; params.platform = 'kucode'; return params; }
+  const gcidMatch = searchText.match(/global_specialid[=:]([^&\s"']+)/);
+  if (gcidMatch) { params.global_collection_id = gcidMatch[1]; params.platform = 'concept'; }
+  if (!params.global_collection_id) {
+    const pathGcidMatch = searchText.match(/[/_]gcid_([^/?&\s"']+)/);
+    if (pathGcidMatch) { params.global_collection_id = pathGcidMatch[1]; params.platform = 'standard'; }
+  }
+  if (!params.global_collection_id) {
+    const srcCidMatch = searchText.match(/src_cid[=:]([^&\s"']+)/);
+    if (srcCidMatch) { params.global_collection_id = srcCidMatch[1]; params.platform = 'standard'; }
+  }
+  const specialidMatch = searchText.match(/[?&]specialid[=:](\d+)/);
+  if (specialidMatch) params.specialid = specialidMatch[1];
+  return params;
+}
+
+function md5Hex(input: string): string {
+  function rh(n: number): number { return (n >>> 0); }
+  function rl(n: number, c: number): number { return rh((n << c) | (n >>> (32 - c))); }
+  function ad(x: number, y: number): number { return rh(x + y); }
+  function cmn(q: number, a: number, b: number, x: number, s: number, t: number): number { a = ad(ad(a, q), ad(x, t)); return ad(rl(a, s), b); }
+  function ff(a: number, b: number, c: number, d: number, x: number, s: number, t: number): number { return cmn((b & c) | (~b & d), a, b, x, s, t); }
+  function gg(a: number, b: number, c: number, d: number, x: number, s: number, t: number): number { return cmn((b & d) | (c & ~d), a, b, x, s, t); }
+  function hh(a: number, b: number, c: number, d: number, x: number, s: number, t: number): number { return cmn(b ^ c ^ d, a, b, x, s, t); }
+  function ii(a: number, b: number, c: number, d: number, x: number, s: number, t: number): number { return cmn(c ^ (b | ~d), a, b, x, s, t); }
+  function toUTF8(str: string): number[] {
+    const out: number[] = [];
+    for (let i = 0; i < str.length; i++) {
+      let c = str.charCodeAt(i);
+      if (c < 128) out.push(c);
+      else if (c < 2048) { out.push(192 | (c >> 6)); out.push(128 | (c & 63)); }
+      else if (c < 55296 || c >= 57344) { out.push(224 | (c >> 12)); out.push(128 | ((c >> 6) & 63)); out.push(128 | (c & 63)); }
+      else { i++; c = 65536 + (((c & 1023) << 10) | (str.charCodeAt(i) & 1023)); out.push(240 | (c >> 18)); out.push(128 | ((c >> 12) & 63)); out.push(128 | ((c >> 6) & 63)); out.push(128 | (c & 63)); }
+    }
+    return out;
+  }
+  const bytes = toUTF8(input);
+  const n = bytes.length, msgLen = n * 8;
+  bytes.push(0x80);
+  while (bytes.length % 64 !== 56) bytes.push(0);
+  const lenLow = msgLen >>> 0;
+  for (let i = 0; i < 4; i++) bytes.push((lenLow >>> (i * 8)) & 0xff);
+  for (let i = 0; i < 4; i++) bytes.push(0);
+  let a = 1732584193, b = -271733879, c = -1732584194, d = 271733878;
+  for (let i = 0; i < bytes.length; i += 64) {
+    const x: number[] = [];
+    for (let j = 0; j < 16; j++) {
+      const off = i + j * 4;
+      x[j] = (bytes[off] | (bytes[off + 1] << 8) | (bytes[off + 2] << 16) | (bytes[off + 3] << 24)) >>> 0;
+    }
+    const oa = a, ob = b, oc = c, od = d;
+    a = ff(a, b, c, d, x[0], 7, -680876936); d = ff(d, a, b, c, x[1], 12, -389564586);
+    c = ff(c, d, a, b, x[2], 17, 606105819); b = ff(b, c, d, a, x[3], 22, -1044525330);
+    a = ff(a, b, c, d, x[4], 7, -176418897); d = ff(d, a, b, c, x[5], 12, 1200080426);
+    c = ff(c, d, a, b, x[6], 17, -1473231341); b = ff(b, c, d, a, x[7], 22, -45705983);
+    a = ff(a, b, c, d, x[8], 7, 1770035416); d = ff(d, a, b, c, x[9], 12, -1958414417);
+    c = ff(c, d, a, b, x[10], 17, -42063); b = ff(b, c, d, a, x[11], 22, -1990404162);
+    a = ff(a, b, c, d, x[12], 7, 1804603682); d = ff(d, a, b, c, x[13], 12, -40341101);
+    c = ff(c, d, a, b, x[14], 17, -1502002290); b = ff(b, c, d, a, x[15], 22, 1236535329);
+    a = gg(a, b, c, d, x[1], 5, -165796510); d = gg(d, a, b, c, x[6], 9, -1069501632);
+    c = gg(c, d, a, b, x[11], 14, 643717713); b = gg(b, c, d, a, x[0], 20, -373897302);
+    a = gg(a, b, c, d, x[5], 5, -701558691); d = gg(d, a, b, c, x[10], 9, 38016083);
+    c = gg(c, d, a, b, x[15], 14, -660478335); b = gg(b, c, d, a, x[4], 20, -405537848);
+    a = gg(a, b, c, d, x[9], 5, 568446438); d = gg(d, a, b, c, x[14], 9, -1019803690);
+    c = gg(c, d, a, b, x[3], 14, -187363961); b = gg(b, c, d, a, x[8], 20, 1163531501);
+    a = gg(a, b, c, d, x[13], 5, -1444681467); d = gg(d, a, b, c, x[2], 9, -51403784);
+    c = gg(c, d, a, b, x[7], 14, 1735328473); b = gg(b, c, d, a, x[12], 20, -1926607734);
+    a = hh(a, b, c, d, x[5], 4, -378558); d = hh(d, a, b, c, x[8], 11, -2022574463);
+    c = hh(c, d, a, b, x[11], 16, 1839030562); b = hh(b, c, d, a, x[14], 23, -35309556);
+    a = hh(a, b, c, d, x[1], 4, -1530992060); d = hh(d, a, b, c, x[4], 11, 1272893353);
+    c = hh(c, d, a, b, x[7], 16, -155497632); b = hh(b, c, d, a, x[10], 23, -1094730640);
+    a = hh(a, b, c, d, x[13], 4, 681279174); d = hh(d, a, b, c, x[0], 11, -358537222);
+    c = hh(c, d, a, b, x[3], 16, -722521979); b = hh(b, c, d, a, x[6], 23, 76029189);
+    a = hh(a, b, c, d, x[9], 4, -640364487); d = hh(d, a, b, c, x[12], 11, -421815835);
+    c = hh(c, d, a, b, x[15], 16, 530742520); b = hh(b, c, d, a, x[2], 23, -995338651);
+    a = ii(a, b, c, d, x[0], 6, -198630844); d = ii(d, a, b, c, x[7], 10, 1126891415);
+    c = ii(c, d, a, b, x[14], 15, -1416354905); b = ii(b, c, d, a, x[5], 21, -57434055);
+    a = ii(a, b, c, d, x[12], 6, 1700485571); d = ii(d, a, b, c, x[3], 10, -1894986606);
+    c = ii(c, d, a, b, x[10], 15, -1051523); b = ii(b, c, d, a, x[1], 21, -2054922799);
+    a = ii(a, b, c, d, x[8], 6, 1873313359); d = ii(d, a, b, c, x[15], 10, -30611744);
+    c = ii(c, d, a, b, x[6], 15, -1560198380); b = ii(b, c, d, a, x[13], 21, 1309151649);
+    a = ii(a, b, c, d, x[4], 6, -145523070); d = ii(d, a, b, c, x[11], 10, -1120210379);
+    c = ii(c, d, a, b, x[2], 15, 718787259); b = ii(b, c, d, a, x[9], 21, -343485551);
+    a = rh(a + oa); b = rh(b + ob); c = rh(c + oc); d = rh(d + od);
+  }
+  const toHex = (n: number): string => { let s = ''; for (let i = 0; i < 4; i++) { s += ((n >>> (i * 8)) & 0xff).toString(16).padStart(2, '0'); } return s; };
+  return toHex(a) + toHex(b) + toHex(c) + toHex(d);
+}
+
+function kugouSign(globalCollectionId: string, specialid: string): string {
+  const data = `OIlwieks28dk2k092lksi2UIkpappid=1005area_code=1clientver=12309global_collection_id=${globalCollectionId}mode=1module=CloudMusicneed_sort=1page=1pagesize=300specialid=${specialid}type=0userid=0OIlwieks28dk2k092lksi2UIkp`;
+  return md5Hex(data);
+}
+
+type TPSong = { name: string; singer: string; hash: string; album_id: string; albumName: string; duration: number; cover?: string };
+
+// 从酷狗歌曲对象中尝试提取封面 URL
+function extractKugouCover(song: Record<string, unknown>): string {
+  const info = (song.info || {}) as Record<string, unknown>;
+  const transParam = (song.trans_param || {}) as Record<string, unknown>;
+  const albuminfo = (song.albuminfo || {}) as Record<string, unknown>;
+  const singerinfo = (song.singerinfo || []) as Array<Record<string, unknown>>;
+  const candidates = [
+    // get_res_privilege/lite 返回
+    info.image, union_cover_of(song), transParam.union_cover,
+    // 标准歌单/概念歌单返回字段
+    albuminfo.imgurl, albuminfo.pic, albuminfo.cover, albuminfo.img,
+    song.album_img, song.imgurl, song.pic, song.cover, song.coverUrl, song.cover_url,
+    song.album_logo, song.albumpic, song.albumpic_small, song.albumpic_big,
+    // 歌手头像兜底
+    singerinfo[0]?.imgurl, singerinfo[0]?.avatar, singerinfo[0]?.pic,
+  ];
+  for (const c of candidates) {
+    if (typeof c === 'string' && c && /^https?:\/\//i.test(c)) {
+      return c.replace('{size}', '400').replace('http://', 'https://');
+    }
+  }
+  return '';
+}
+
+// union_cover 字段可能在顶层
+function union_cover_of(song: Record<string, unknown>): unknown {
+  for (const k of Object.keys(song)) {
+    if (k.toLowerCase() === 'union_cover') return (song as any)[k];
+  }
+  return undefined;
+}
+
+// 通过 get_res_privilege/lite 批量补齐歌曲封面（与酷狗码 step3 使用同一接口）
+async function fillKugouCoversByHash(songs: TPSong[]): Promise<void> {
+  const missing = songs.filter(s => !s.cover && s.hash);
+  if (missing.length === 0) return;
+  // 分批，每批最多 100 首
+  const BATCH = 100;
+  const kugouHeaders = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/106.0.0.0 Safari/537.36',
+    'Accept': '*/*', 'Accept-Language': 'zh-CN,zh;q=0.9', 'Content-Type': 'application/json',
+  };
+  const hashToCover = new Map<string, string>();
+  for (let bi = 0; bi < missing.length; bi += BATCH) {
+    const batch = missing.slice(bi, bi + BATCH);
+    const resource = batch.map(s => ({
+      album_audio_id: 0, album_id: s.album_id || '0', hash: s.hash, id: 0,
+      name: `${s.singer} - ${s.name}`, page_id: 0, type: 'audio',
+    }));
+    const postData = {
+      appid: 1001, area_code: '1', behavior: 'play', clientver: '10112',
+      dfid: '2O3jKa20Gdks0LWojP3ly7ck', mid: '70a02aad1ce4648e7dca77f2afa7b182',
+      need_hash_offset: 1, relate: 1, resource, token: '', userid: '0', vip: 0,
+    };
+    try {
+      const resp = await fetch('https://gateway.kugou.com/v2/get_res_privilege/lite?appid=1001&clienttime=1668883879&clientver=10112&dfid=2O3jKa20Gdks0LWojP3ly7ck&mid=70a02aad1ce4648e7dca77f2afa7b182&userid=390523108&uuid=92691C6246F86F28B149BAA1FD370DF1', {
+        method: 'POST', headers: { ...kugouHeaders, 'x-router': 'media.store.kugou.com' },
+        body: JSON.stringify(postData),
+      });
+      if (!resp.ok) continue;
+      const d = await resp.json() as Record<string, unknown>;
+      const list = (d.data || []) as Array<Record<string, unknown>>;
+      list.forEach(item => {
+        const h = String(item.hash || '');
+        const info = (item.info || {}) as Record<string, unknown>;
+        const cover = String(info.image || (item as any).union_cover || '');
+        if (h && cover && /^https?:\/\//i.test(cover)) {
+          hashToCover.set(h, cover.replace('{size}', '400').replace('http://', 'https://'));
+        }
+      });
+    } catch { /* ignore batch error */ }
+  }
+  // 回填封面
+  songs.forEach(s => {
+    if (!s.cover && s.hash && hashToCover.has(s.hash)) {
+      s.cover = hashToCover.get(s.hash)!;
+    }
+  });
+}
+
+async function fetchKugouKucodePlaylist(kucode: string): Promise<{ name: string; count: number; songs: TPSong[] }> {
+  const kugouHeaders = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/106.0.0.0 Safari/537.36',
+    'Accept': '*/*', 'Accept-Language': 'zh-CN,zh;q=0.9', 'Content-Type': 'application/json',
+  };
+  const step1Resp = await fetch('http://t.kugou.com/command/', {
+    method: 'POST', headers: kugouHeaders,
+    body: JSON.stringify({ appid: 1001, clientver: 9020, mid: '21511157a05844bd085308bc76ef3343', clienttime: 640612895, key: '36164c4015e704673c588ee202b9ecb8', data: kucode }),
+  });
+  if (!step1Resp.ok) throw new Error(`酷狗码解析失败（步骤1）: HTTP ${step1Resp.status}`);
+  const step1Data = await step1Resp.json() as Record<string, unknown>;
+  if (step1Data.status !== 1) throw new Error('酷狗码无效或已过期');
+  const info = ((step1Data as Record<string, unknown>).data as Record<string, unknown>)?.info as Record<string, unknown>;
+  if (!info) throw new Error('无法获取酷狗码信息');
+  const shareId = String(info.id || ''); const userId = String(info.userid || '0');
+  const collectType = Number(info.collect_type || 3); const songCount = Number(info.count || 0);
+  const playlistName = String(info.special_name || info.name || '酷狗歌单');
+  if (!shareId) throw new Error('酷狗码返回数据无效');
+
+  const step2Resp = await fetch('http://www2.kugou.kugou.com/apps/kucodeAndShare/app/', {
+    method: 'POST', headers: kugouHeaders,
+    body: JSON.stringify({ appid: 1001, clientver: 10112, mid: '70a02aad1ce4648e7dca77f2afa7b182', clienttime: 722219501, key: '381d7062030e8a5a94cfbe50bfe65433', data: { id: shareId, type: 3, userid: userId, collect_type: collectType, page: 1, pagesize: songCount || 300 } }),
+  });
+  if (!step2Resp.ok) throw new Error(`获取酷狗码歌单失败（步骤2）: HTTP ${step2Resp.status}`);
+  const step2Data = await step2Resp.json() as Record<string, unknown>;
+  if (step2Data.status !== 1) throw new Error('获取酷狗码歌曲列表失败');
+  const songList = (step2Data.data || []) as Array<Record<string, unknown>>;
+  if (songList.length === 0) throw new Error('酷狗码歌单为空或已失效');
+
+  const resource = songList.map((s: Record<string, unknown>) => ({ album_audio_id: 0, album_id: '0', hash: String(s.hash || ''), id: 0, name: String(s.filename || s.name || '').replace('.mp3', ''), page_id: 0, type: 'audio' }));
+  const postData = { appid: 1001, area_code: '1', behavior: 'play', clientver: '10112', dfid: '2O3jKa20Gdks0LWojP3ly7ck', mid: '70a02aad1ce4648e7dca77f2afa7b182', need_hash_offset: 1, relate: 1, resource, token: '', userid: '0', vip: 0 };
+  const step3Resp = await fetch('https://gateway.kugou.com/v2/get_res_privilege/lite?appid=1001&clienttime=1668883879&clientver=10112&dfid=2O3jKa20Gdks0LWojP3ly7ck&mid=70a02aad1ce4648e7dca77f2afa7b182&userid=390523108&uuid=92691C6246F86F28B149BAA1FD370DF1', {
+    method: 'POST', headers: { ...kugouHeaders, 'x-router': 'media.store.kugou.com' }, body: JSON.stringify(postData),
+  });
+  if (!step3Resp.ok) throw new Error(`获取歌曲详情失败（步骤3）: HTTP ${step3Resp.status}`);
+  const step3Data = await step3Resp.json() as Record<string, unknown>;
+  const detailList = (step3Data.data || []) as Array<Record<string, unknown>>;
+
+  const songs: TPSong[] = detailList.map((song: Record<string, unknown>) => {
+    let title = String(song.name || song.songname || '未知歌曲');
+    const singerName = String(song.singername || '');
+    if (singerName && title) { const idx = title.indexOf(singerName); if (idx === 0 && title.length > singerName.length) title = title.substring(singerName.length).replace(/^[\s\-]+/, '').trim(); }
+    return {
+      name: title, singer: singerName, hash: String(song.hash || ''),
+      album_id: String(song.album_id || '0'), albumName: String(song.albumname || song.album_name || ''),
+      duration: Math.round(Number(song.duration || 0)), cover: extractKugouCover(song),
+    };
+  });
+  // 批量补齐缺失封面（通过酷狗专辑信息接口）
+  await fillKugouCoversByHash(songs);
+  return { name: playlistName, count: songs.length, songs };
+}
+
+async function fetchKugouStandardPlaylist(gcid: string): Promise<{ name: string; count: number; songs: TPSong[] }> {
+  const url = `https://m.kugou.com/songlist/gcid_${gcid}`;
+  const resp = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36', 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8' } });
+  if (!resp.ok) throw new Error(`获取歌单页面失败: HTTP ${resp.status}`);
+  const text = await resp.text();
+  const startMarker = 'window.$output = '; const startIdx = text.indexOf(startMarker);
+  if (startIdx === -1) throw new Error('无法从歌单页面提取数据');
+  const jsonStart = startIdx + startMarker.length;
+  const endIdx = text.indexOf('</script>', jsonStart);
+  if (endIdx === -1) throw new Error('无法找到数据结束位置');
+  const jsonStr = text.substring(jsonStart, endIdx).trim().replace(/;$/, '');
+  let output: Record<string, unknown>;
+  try { output = JSON.parse(jsonStr) as Record<string, unknown>; } catch { throw new Error('歌单页面数据解析失败'); }
+  const info = (output.info || {}) as Record<string, unknown>;
+  const listinfo = (info.listinfo || {}) as Record<string, unknown>;
+  const rawSongs = (info.songs || []) as Array<Record<string, unknown>>;
+  const songs: TPSong[] = rawSongs.map((song: Record<string, unknown>) => {
+    const fullName = String(song.name || '未知歌曲'); const parts = fullName.split(/\s*-\s*/);
+    const songName = parts.length > 1 ? parts.slice(1).join(' - ') : fullName; const singer = parts.length > 1 ? parts[0] : '';
+    const singerinfo = (song.singerinfo || []) as Array<Record<string, unknown>>;
+    const singerName = singerinfo.length > 0 ? String((singerinfo[0] as Record<string, unknown>).name || singer) : singer;
+    const albuminfo = (song.albuminfo || {}) as Record<string, unknown>;
+    return {
+      name: songName, singer: singerName, hash: String(song.hash || ''),
+      album_id: String(song.album_id || ''), albumName: String(albuminfo.name || ''),
+      duration: Math.round(Number(song.timelen || 0) / 1000), cover: extractKugouCover(song),
+    };
+  });
+  await fillKugouCoversByHash(songs);
+  return { name: String(listinfo.name || '酷狗歌单'), count: Number(listinfo.count || songs.length), songs };
+}
+
+async function fetchKugouConceptPlaylist(gcid: string, specialid: string): Promise<{ name: string; count: number; songs: TPSong[] }> {
+  const sign = kugouSign(gcid, specialid);
+  const listUrl = `https://gateway.kugou.com/pubsongs/v4/get_other_list_file?specialid=${specialid}&need_sort=1&module=CloudMusic&signature=${sign}&clientver=12309&pagesize=300&global_collection_id=${gcid}&userid=0&mode=1&page=1&type=0&area_code=1&appid=1005`;
+  const resp = await fetch(listUrl, { headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36' } });
+  if (!resp.ok) throw new Error(`获取歌单失败: HTTP ${resp.status}`);
+  const data = await resp.json() as Record<string, unknown>;
+  const dataField = (data.data || data) as Record<string, unknown>;
+  const songs = (dataField.info || dataField.list || dataField || []) as Array<Record<string, unknown>>;
+  const songList: TPSong[] = songs.map((song: Record<string, unknown>) => {
+    const fullName = String(song.name || song.filename || '未知歌曲'); const parts = fullName.split(/\s*-\s*/);
+    const songName = parts.length > 1 ? parts.slice(1).join(' - ') : fullName; const singer = parts.length > 1 ? parts[0] : '';
+    return {
+      name: songName, singer, hash: String(song.hash || ''),
+      album_id: String(song.album_id || ''),
+      albumName: String((song.albuminfo as Record<string, unknown> | undefined)?.name || ''),
+      duration: Math.round(Number(song.timelen || 0) / 1000), cover: extractKugouCover(song),
+    };
+  });
+  await fillKugouCoversByHash(songList);
+  return { name: '酷狗歌单', count: songList.length, songs: songList };
+}
+
+// ===== 酷我音乐歌单解析 =====
+function extractKuwoPid(text: string): string {
+  const decoded = (() => { try { return decodeURIComponent(text); } catch { return text; } })();
+  const haystack = decoded + ' ' + text;
+  const m = haystack.match(/playlist_detail[/#]*\/?(\d+)/);
+  if (m) return m[1];
+  const pidM = haystack.match(/[?&]pid=(\d+)/);
+  if (pidM) return pidM[1];
+  if (/^\d+$/.test(text.trim())) return text.trim();
+  return '';
+}
+
+async function fetchKuwoPlaylist(pid: string): Promise<{ name: string; count: number; songs: TPSong[] }> {
+  const pageSize = 100;
+  let page = 1;
+  const allSongs: TPSong[] = [];
+  let playlistName = '酷我歌单';
+  let total = 0;
+  while (page <= 20) {
+    const url = `https://wapi.kuwo.cn/api/www/playlist/playListInfo?pid=${pid}&pn=${page}&rn=${pageSize}`;
+    const resp = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*',
+        'Referer': `https://kuwo.cn/playlist_detail/${pid}`,
+        'csrf': 'no',
+        'Cookie': 'kw_token=no',
+      },
+    });
+    if (!resp.ok) throw new Error(`获取酷我歌单失败: HTTP ${resp.status}`);
+    const data = await resp.json() as Record<string, unknown>;
+    if (Number(data.code) !== 200) throw new Error(`酷我 API 错误: ${String(data.msg || data.message || '')}`);
+    const info = (data.data || {}) as Record<string, unknown>;
+    if (page === 1) {
+      playlistName = String(info.name || '酷我歌单');
+      total = Number(info.total || 0);
+    }
+    const musicList = Array.isArray(info.musicList) ? info.musicList : [];
+    if (musicList.length === 0) break;
+    for (const s of musicList as Array<Record<string, unknown>>) {
+      const pic = String(s.pic || s.albumPic || s.albumpic || '');
+      allSongs.push({
+        name: String(s.name || '未知歌曲'),
+        singer: String(s.artist || s.singer || ''),
+        hash: String(s.rid || s.musicrid || ''),
+        album_id: String(s.albumid || s.albumId || ''),
+        albumName: String(s.album || s.albumname || ''),
+        duration: Math.round(Number(s.duration || 0)),
+        cover: pic && /^https?:\/\//i.test(pic) ? pic.replace('{size}', '400') : '',
+      });
+    }
+    if (allSongs.length >= total) break;
+    page++;
+  }
+  return { name: playlistName, count: allSongs.length, songs: allSongs };
+}
+
+// ===== 网易云音乐歌单解析 =====
+function extractNeteaseId(text: string): string {
+  const decoded = (() => { try { return decodeURIComponent(text); } catch { return text; } })();
+  const haystack = decoded + ' ' + text;
+  const m = haystack.match(/[?&]id=(\d+)/);
+  if (m) return m[1];
+  const m2 = haystack.match(/playlist[/#]*\/?(\d+)/);
+  if (m2) return m2[1];
+  if (/^\d+$/.test(text.trim())) return text.trim();
+  return '';
+}
+
+async function fetchNeteasePlaylist(playlistId: string): Promise<{ name: string; count: number; songs: TPSong[] }> {
+  const detailUrl = `https://music.163.com/api/v6/playlist/detail?id=${playlistId}&n=100000&s=0`;
+  const detailResp = await fetch(detailUrl, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      'Referer': 'https://music.163.com/',
+      'Cookie': 'os=pc; appver=2.9.7',
+    },
+  });
+  if (!detailResp.ok) throw new Error(`获取网易云歌单信息失败: HTTP ${detailResp.status}`);
+  const detailData = await detailResp.json() as Record<string, unknown>;
+  if (Number(detailData.code) !== 200) throw new Error(`网易云 API 错误: ${String(detailData.msg || '')}`);
+  const playlist = (detailData.playlist || {}) as Record<string, unknown>;
+  const playlistName = String(playlist.name || '网易云歌单');
+
+  // 如果 tracks 已直接返回完整数据（歌单不大时），直接用；否则用 trackIds 批量查 song/detail
+  let tracks: any[] = [];
+  if (Array.isArray(playlist.tracks) && (playlist.tracks as any[]).length > 0
+      && (playlist.tracks as any[])[0] && (playlist.tracks as any[])[0].name) {
+    tracks = playlist.tracks as any[];
+  } else {
+    const trackIds = Array.isArray(playlist.trackIds) ? playlist.trackIds as Array<Record<string, unknown>> : [];
+    if (trackIds.length === 0) return { name: playlistName, count: 0, songs: [] };
+    const ids = trackIds.map((t) => Number(t.id)).filter((n) => n > 0);
+    // 分批获取歌曲详情（每批 500）
+    const BATCH = 500;
+    for (let i = 0; i < ids.length; i += BATCH) {
+      const batch = ids.slice(i, i + BATCH);
+      const c = `[${batch.join(',')}]`;
+      const songUrl = `https://music.163.com/api/song/detail?ids=${encodeURIComponent(c)}`;
+      const songResp = await fetch(songUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Referer': 'https://music.163.com/',
+          'Cookie': 'os=pc; appver=2.9.7',
+        },
+      });
+      if (!songResp.ok) continue;
+      const songData = await songResp.json() as Record<string, unknown>;
+      const arr = Array.isArray(songData.songs) ? songData.songs : [];
+      tracks = tracks.concat(arr as any[]);
+    }
+  }
+
+  const songs: TPSong[] = [];
+  for (const s of tracks) {
+    const ar = Array.isArray(s.artists) ? s.artists : (Array.isArray(s.ar) ? s.ar : []);
+    const artistNames = ar.map((a: Record<string, unknown>) => String(a.name || '')).filter(Boolean).join('/');
+    const al = (s.album || s.al || {}) as Record<string, unknown>;
+    const pic = String(al.picUrl || s.album?.picUrl || s.al?.picUrl || '');
+    songs.push({
+      name: String(s.name || '未知歌曲'),
+      singer: artistNames,
+      hash: String(s.id || ''),
+      album_id: String(al.id || ''),
+      albumName: String(al.name || ''),
+      duration: Math.round(Number(s.dt || s.duration || 0) / 1000),
+      cover: pic || '',
+    });
+  }
+  return { name: playlistName, count: songs.length, songs };
+}
+
+// 解析三方歌单链接
+router.post('/api/third-party/parse', async (req) => {
+  try {
+    const body = await parseBody(req);
+    const url = String(body.url || '').trim();
+    const platform = String(body.platform || 'kugou').trim().toLowerCase();
+    if (!url) return jsonResponse({ error: 'url is required' }, 400);
+
+    let result: { name: string; count: number; songs: TPSong[] };
+
+    if (platform === 'kuwo') {
+      const pid = extractKuwoPid(url);
+      if (!pid) return jsonResponse({ error: '无法从链接中提取酷我歌单ID（pid），请粘贴 https://m.kuwo.cn/newh5app/playlist_detail/xxx 形式的链接' }, 400);
+      result = await fetchKuwoPlaylist(pid);
+    } else if (platform === 'netease') {
+      const id = extractNeteaseId(url);
+      if (!id) return jsonResponse({ error: '无法从链接中提取网易云歌单ID，请粘贴 https://music.163.com/#/playlist?id=xxx 形式的链接' }, 400);
+      result = await fetchNeteasePlaylist(id);
+    } else {
+      // 默认酷狗
+      let params = extractKugouParams(url);
+      if (!params.global_collection_id && !params.kucode) {
+        try {
+          const resp = await fetch(url, { method: 'GET', headers: { 'User-Agent': 'Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36' } });
+          const candidates: string[] = [];
+          if (typeof (resp as any).url === 'string') candidates.push((resp as any).url);
+          const h = (resp as any).headers;
+          if (h && typeof h.get === 'function') { const loc = h.get('location'); if (loc) candidates.push(loc); }
+          for (const c of candidates) { params = extractKugouParams(c); if (params.global_collection_id) break; }
+          if (!params.global_collection_id) {
+            const text = await resp.text();
+            const urlMatch = text.match(/https?:\/\/[^\s"'<>]+global_specialid=[^\s"'<&]+/);
+            if (urlMatch) params = extractKugouParams(urlMatch[0]);
+          }
+        } catch { }
+      }
+
+      if (params.platform === 'kucode') {
+        if (!params.kucode) return jsonResponse({ error: 'kucode is required' }, 400);
+        result = await fetchKugouKucodePlaylist(params.kucode);
+      } else if (params.platform === 'standard') {
+        result = await fetchKugouStandardPlaylist(params.global_collection_id);
+      } else if (params.global_collection_id) {
+        result = await fetchKugouConceptPlaylist(params.global_collection_id, params.specialid || '0');
+      } else {
+        return jsonResponse({ error: '无法解析酷狗链接，请使用酷狗码或包含 gcid/global_collection_id 的歌单链接' }, 400);
+      }
+    }
+    return jsonResponse({ success: true, platform, total: result.songs.length, songs: result.songs, playlistName: result.name });
+  } catch (e) { return jsonResponse({ error: `解析失败: ${String(e)}` }, 500); }
+});
+
+// 搜索单曲匹配（先本地 songloft 库，再 MusicFree 插件）
+router.post('/api/third-party/match', async (req) => {
+  try {
+    const body = await parseBody(req);
+    const name = String(body.name || '').trim();
+    const singer = String(body.singer || '').trim();
+    if (!name) return jsonResponse({ error: 'name is required' }, 400);
+
+    // 归一化字符串：转小写、去空白、去常见标点/符号
+    const normalize = (s: string) =>
+      String(s || '').toLowerCase().replace(/[\s\-_.·・,，。.!！?？、~～"'"\'()（）\[\]【】]/g, '');
+    const nameNorm = normalize(name);
+    const singerNorm = normalize(singer);
+
+    // 1. 优先匹配 songloft 本地库
+    let localBest: any = null;
+    let localBestScore = -1;
+    try {
+      const sl = (globalThis as any).songloft;
+      if (sl?.songs?.list) {
+        const localSongs = sl.songs.list({ limit: 5000, offset: 0 }) as Array<{
+          id: number; title: string; artist: string; album: string; duration: number;
+          cover_url?: string; source_data?: any;
+        }>;
+        for (const s of localSongs) {
+          const tNorm = normalize(s.title);
+          const aNorm = normalize(s.artist);
+          if (!tNorm) continue;
+          let score = -1;
+          // 1a. 标题与艺术家完全相等（含归一化后）
+          if (tNorm === nameNorm) {
+            if (singerNorm && aNorm === singerNorm) score = 100;
+            else if (!singerNorm) score = 90;
+            else if (aNorm && (aNorm.includes(singerNorm) || singerNorm.includes(aNorm))) score = 80;
+          }
+          // 1b. 标题互相包含
+          else if (nameNorm && (tNorm.includes(nameNorm) || nameNorm.includes(tNorm))) {
+            if (singerNorm && aNorm === singerNorm) score = 70;
+            else if (singerNorm && aNorm && (aNorm.includes(singerNorm) || singerNorm.includes(aNorm))) score = 60;
+            else if (!singerNorm) score = 50;
+          }
+          if (score > localBestScore) {
+            localBestScore = score;
+            localBest = s;
+            if (score === 100) break; // 满分直接返回
+          }
+        }
+        if (localBest && localBestScore >= 50) {
+          let srcData: any = null;
+          try { srcData = typeof localBest.source_data === 'string' ? JSON.parse(localBest.source_data) : localBest.source_data; } catch { srcData = null; }
+          // 只有 source_data 含有效 platform/id 时才能走插件解析播放
+          const validSrc = srcData && srcData.platform && srcData.id && srcData.platform !== 'local';
+          const playItem = validSrc
+            ? { ...srcData, title: localBest.title, artist: localBest.artist, album: localBest.album || srcData.album, artwork: localBest.cover_url || srcData.artwork, duration: normalizeDuration(localBest.duration) || srcData.duration }
+            : null;
+          return jsonResponse({
+            matched: true, source: 'local', title: localBest.title, artist: localBest.artist || '',
+            album: localBest.album || '', duration: normalizeDuration(localBest.duration) || 0,
+            cover_url: localBest.cover_url || '',
+            source_data: playItem,
+            local_song_id: localBest.id, // 已存在本地库，导入时可跳过
+            playable: !!playItem,
+          });
+        }
+      }
+    } catch { }
+
+    // 2. 本地库未找到：再走 MusicFree 插件搜索
+    const keyword = `${name} ${singer}`.trim();
+    const tasks = Array.from(installedPlugins).filter(([url]) => !disabledPlugins.has(url) && typeof url === 'string').filter(([, p]) => typeof p.search === 'function').map(async ([, p]) => {
+      try {
+        const result = await withTimeout(p.search!(keyword, 1, 'music'), PLUGIN_TIMEOUT, `search[${p.platform}]`);
+        if (result?.data) return result.data.map((item: any) => ({ ...item, platform: p.platform, duration: normalizeDuration(item.duration) }));
+      } catch { }
+      return [] as MusicItem[];
+    });
+    const nested = await Promise.all(tasks);
+    const allResults = nested.flat();
+
+    if (allResults.length > 0) {
+      // 插件结果也用归一化打分，挑最匹配的
+      let best: any = null;
+      let bestScore = -1;
+      for (const r of allResults) {
+        const tNorm = normalize(r.title);
+        const aRaw = Array.isArray(r.artist) ? r.artist.join(' ') : (r.artist || '');
+        const aNorm = normalize(aRaw);
+        let score = 0;
+        if (tNorm === nameNorm) {
+          if (singerNorm && aNorm === singerNorm) score = 100;
+          else if (!singerNorm) score = 90;
+          else if (aNorm && (aNorm.includes(singerNorm) || singerNorm.includes(aNorm))) score = 80;
+          else score = 70;
+        } else if (tNorm && (tNorm.includes(nameNorm) || nameNorm.includes(tNorm))) {
+          if (singerNorm && aNorm === singerNorm) score = 60;
+          else if (singerNorm && aNorm && (aNorm.includes(singerNorm) || singerNorm.includes(aNorm))) score = 50;
+          else score = 40;
+        }
+        if (score > bestScore) { bestScore = score; best = r; if (score === 100) break; }
+      }
+      if (!best) best = allResults[0];
+      const artistStr = Array.isArray(best.artist) ? best.artist.join(' / ') : (best.artist || '');
+      return jsonResponse({
+        matched: true, source: 'plugin', title: best.title, artist: artistStr,
+        album: best.album || '', duration: best.duration || 0, cover_url: best.artwork || '',
+        source_data: { platform: best.platform, id: best.id, title: best.title, artist: best.artist, album: best.album, duration: best.duration, artwork: best.artwork, qualities: best.qualities },
+      });
+    }
+
+    return jsonResponse({ matched: false, error: '未找到匹配歌曲' });
+  } catch (e) { return jsonResponse({ error: String(e) }, 500); }
+});
+
+// 获取 Songloft 歌单列表
+router.get('/api/songloft-playlists', async (req) => {
+  try {
+    const auth = req.headers?.authorization || '';
+    const origin = req.headers?.origin || req.headers?.['x-forwarded-host'] || '';
+    const host = origin ? `https://${origin.replace(/^https?:\/\//, '').replace(/\/+$/, '')}` : 'https://songloftserver';
+    const resp = await fetch(`${host}/api/v1/playlists`, { headers: { 'Content-Type': 'application/json', Authorization: auth } });
+    if (!resp.ok) return jsonResponse({ success: false, error: await resp.text() }, 500);
+    const data = await resp.json();
+    return jsonResponse({ success: true, playlists: (data as any).playlists || [] });
+  } catch (e) { return jsonResponse({ success: false, error: String(e) }, 500); }
+});
+
+// 获取 Songloft 歌单列表
+router.get('/api/songloft-playlists', async (req) => {
+  try {
+    const auth = req.headers?.authorization || '';
+    const host = 'https://songloftserver';
+    const resp = await fetch(`${host}/api/v1/playlists`, { headers: { 'Content-Type': 'application/json', Authorization: auth } });
+    if (!resp.ok) return jsonResponse({ success: false, error: await resp.text() }, 500);
+    const data = await resp.json();
+    return jsonResponse({ success: true, playlists: (data as any).playlists || [] });
+  } catch (e) { return jsonResponse({ success: false, error: String(e) }, 500); }
+});
+
 async function onInit(): Promise<void> {
   songloft.log.info('MusicFree adapter plugin initialized');
   await loadSavedPlugins();
