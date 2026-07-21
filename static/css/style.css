@@ -344,6 +344,10 @@ body {
   margin-bottom: 14px;
   flex-wrap: wrap;
 }
+.search-source-tabs {
+  margin: 10px 0 12px;
+  padding: 0 2px;
+}
 .rank-tab {
   padding: 5px 14px;
   border-radius: 20px;

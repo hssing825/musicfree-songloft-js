@@ -537,9 +537,53 @@
   var searchKeyword = document.getElementById('search-keyword');
   var searchResults = document.getElementById('search-results');
   var searchLoader = document.getElementById('search-loader');
+  var searchSourceTabs = document.getElementById('search-source-tabs');
 
   var lastResults = [];
-  var searchState = { query: '', page: 1, loading: false, end: true };
+  var searchState = { query: '', platform: '', page: 1, loading: false, end: true, requestId: 0 };
+
+  function getSearchPlatforms() {
+    var seen = {};
+    return (window._allPlugins || []).filter(function (p) {
+      return p.enabled !== false && p.capabilities && p.capabilities.search;
+    }).map(function (p) {
+      return p.platform;
+    }).filter(function (platform) {
+      if (!platform || seen[platform]) return false;
+      seen[platform] = true;
+      return true;
+    });
+  }
+
+  function resetSearchForPlatform(platform) {
+    searchState.requestId++;
+    searchState.platform = platform;
+    searchState.page = 1;
+    searchState.loading = false;
+    searchState.end = false;
+    lastResults = [];
+    searchBtn.disabled = true;
+    searchResults.innerHTML = '<div class="empty-state">搜索中...</div>';
+    loadSearchPage();
+  }
+
+  function renderSearchSourceTabs(platforms) {
+    var html = '';
+    platforms.forEach(function (platform, index) {
+      html += '<span class="rank-tab' + (index === 0 ? ' active' : '') + '" data-search-platform="' + escapeHtml(platform) + '">' + escapeHtml(platform) + '</span>';
+    });
+    searchSourceTabs.innerHTML = html;
+    Array.from(searchSourceTabs.children).forEach(function (tab) {
+      tab.addEventListener('click', function () {
+        var platform = tab.getAttribute('data-search-platform');
+        if (platform === searchState.platform) return;
+        var active = searchSourceTabs.querySelector('.active');
+        if (active) active.classList.remove('active');
+        tab.classList.add('active');
+        resetSearchForPlatform(platform);
+      });
+    });
+  }
 
   function songloftApiUrl(path) {
     var auth = JSON.parse(localStorage.getItem('songloft-auth') || '{}');
@@ -794,21 +838,25 @@
     searchState.loading = true;
     searchLoader.style.display = '';
 
-    ajax('GET', '/search?q=' + encodeURIComponent(searchState.query) + '&page=' + searchState.page, null, function (err, data) {
+    var requestId = searchState.requestId;
+    var requestedPage = searchState.page;
+    var platformParam = searchState.platform ? '&platform=' + encodeURIComponent(searchState.platform) : '';
+    ajax('GET', '/search?q=' + encodeURIComponent(searchState.query) + '&page=' + requestedPage + platformParam, null, function (err, data) {
+      if (requestId !== searchState.requestId) return;
       searchState.loading = false;
       searchLoader.style.display = 'none';
       if (err || !data) {
-        if (searchState.page === 1) { searchResults.innerHTML = '<div class="message error-message">搜索失败</div>'; searchBtn.disabled = false; }
+        if (requestedPage === 1) { searchResults.innerHTML = '<div class="message error-message">搜索失败</div>'; searchBtn.disabled = false; }
         return;
       }
       var items = data.data || [];
       if (items.length === 0) {
         searchState.end = true;
-        if (searchState.page === 1) { searchResults.innerHTML = '<div class="empty-state">未找到相关结果</div>'; searchBtn.disabled = false; }
+        if (requestedPage === 1) { searchResults.innerHTML = '<div class="empty-state">未找到相关结果</div>'; searchBtn.disabled = false; }
         return;
       }
-      if (searchState.page === 1) searchBtn.disabled = false;
-      if (searchState.page === 1) {
+      if (requestedPage === 1) searchBtn.disabled = false;
+      if (requestedPage === 1) {
         searchResults.innerHTML = '<div class="table-wrap"><table class="data-table songs"><thead><tr><th class="col-cover"></th><th>歌曲名</th><th>艺术家</th><th class="col-platform">来源平台</th><th></th></tr></thead><tbody>';
       }
       var tbody = searchResults.querySelector('tbody');
@@ -816,7 +864,7 @@
         tbody.insertAdjacentHTML('beforeend', renderSearchRows(items, lastResults.length));
       }
       Array.prototype.push.apply(lastResults, items);
-      searchState.page++;
+      searchState.page = requestedPage + 1;
       if (data.isEnd) searchState.end = true;
     });
   }
@@ -835,6 +883,13 @@
     hotSongsEl.style.display = 'none';
     searchResultsWrap.style.display = '';
     searchState.query = q;
+
+    // 构建音源标签
+    var platforms = getSearchPlatforms();
+    renderSearchSourceTabs(platforms);
+
+    searchState.requestId++;
+    searchState.platform = platforms[0] || '';
     searchState.page = 1;
     searchState.loading = false;
     searchState.end = false;
