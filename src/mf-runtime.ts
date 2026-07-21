@@ -210,15 +210,20 @@ async function axiosRequest(config: AxiosConfig): Promise<AxiosResponse> {
   const originalIsHttp = url.startsWith('http://');
   const targetUrl = originalIsHttp ? url.replace('http://', 'https://') : url;
 
-  const makeRequest = async (u: string): Promise<AxiosResponse> => {
-    const init: any = { method, headers: {} };
-    if (config.headers) {
-      for (const k in config.headers) {
-        if (Object.prototype.hasOwnProperty.call(config.headers, k)) {
-          init.headers[k] = config.headers[k];
-        }
+  // Songloft SDK 的 fetch 不会自动解压 gzip/deflate，移除 Accept-Encoding
+  // 避免服务器返回压缩内容导致 JSON 解析失败
+  const filteredHeaders: Record<string, string> = {};
+  if (config.headers) {
+    for (const k in config.headers) {
+      if (Object.prototype.hasOwnProperty.call(config.headers, k)) {
+        if (k.toLowerCase() === 'accept-encoding') continue;
+        filteredHeaders[k] = config.headers[k];
       }
     }
+  }
+
+  const makeRequest = async (u: string): Promise<AxiosResponse> => {
+    const init: any = { method, headers: { ...filteredHeaders } };
 
     if (config.data !== undefined && config.data !== null && method !== 'GET' && method !== 'HEAD') {
       if (typeof config.data === 'string') {
@@ -269,7 +274,7 @@ async function axiosRequest(config: AxiosConfig): Promise<AxiosResponse> {
   try {
     return await makeRequest(targetUrl);
   } catch (e) {
-    if (originalIsHttp && String(e).toLowerCase().includes('tls') || String(e).toLowerCase().includes('certificate')) {
+    if (originalIsHttp && (String(e).toLowerCase().includes('tls') || String(e).toLowerCase().includes('certificate'))) {
       return await makeRequest(url);
     }
     throw e;
@@ -518,20 +523,23 @@ function cheerioLoad(html: string): (sel: any) => any {
   const doc: DOMNode[] = parseHTML(html);
 
   class Cheerio {
-    elements: DOMNode[];
-    constructor(elements: DOMNode[]) { this.elements = elements; }
+    elements: any[];
+    constructor(elements: any[]) { this.elements = elements; }
     each(fn: (i: number, el: any) => void): Cheerio {
       for (let i = 0; i < this.elements.length; i++) {
         fn.call(this.elements[i], i, this.elements[i]);
       }
       return this;
     }
-    map(fn: (i: number, el: any) => any): any[] {
+    map(fn: (i: number, el: any) => any): Cheerio {
       const r: any[] = [];
       for (let i = 0; i < this.elements.length; i++) {
         r.push(fn.call(this.elements[i], i, this.elements[i]));
       }
-      return r;
+      return new Cheerio(r);
+    }
+    slice(start?: number, end?: number): Cheerio {
+      return new Cheerio(this.elements.slice(start, end));
     }
     find(sel: string): Cheerio {
       const r: DOMNode[] = [];
@@ -646,6 +654,9 @@ function cheerioLoad(html: string): (sel: any) => any {
 
   ($ as any).prototype = Cheerio.prototype;
   Object.setPrototypeOf($, Cheerio.prototype);
+  // 让 $ 自身也成为一个 Cheerio 实例（持有根文档的 elements）
+  // 兼容 cheerio.load(html).text() 等直接调用方式
+  ($ as any).elements = doc;
   return $;
 }
 
