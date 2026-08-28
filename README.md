@@ -1,6 +1,6 @@
-# Adapter — Songloft Plugin
+# MFAdapter — Songloft Plugin
 
-**adapter** 是一个 [Songloft](https://songloft.app) 插件，它作为一个运行时适配器，直接在 Songloft 的 QuickJS 沙箱环境中运行。
+**MFAdapter** 是一个 [Songloft](https://songloft.app) 插件，它作为一个运行时适配器，直接在 Songloft 的 QuickJS 沙箱环境中运行。
 
 ## 开发
 
