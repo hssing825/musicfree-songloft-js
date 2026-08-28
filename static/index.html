@@ -61,7 +61,12 @@
       </div>
       <div id="search-bar" class="search-bar">
         <div class="form-row">
-          <input id="search-keyword" type="text" placeholder="输入歌名或歌手搜索..." />
+          <!-- 新增搜索类型下拉框 -->
+          <select id="search-type" class="form-control" style="width: 80px; margin-right: 8px;">
+            <option value="music">单曲</option>
+            <option value="sheet">歌单</option>
+          </select>
+          <input id="search-keyword" type="text" placeholder="输入歌名、歌手或歌单名搜索..." />
           <button id="search-btn" class="btn btn-primary">搜索</button>
         </div>
       </div>

@@ -632,7 +632,7 @@ router.get('/search', async (req) => {
     const queryParams = parseQuery(req.query || '');
     const query = queryParams['q'];
     const pageStr = queryParams['page'] || '1';
-    const type = queryParams['type'] || 'music';
+    const type = queryParams['type'] || 'music'; // 提取搜索类型，支持 music, sheet 等
     const platformFilter = queryParams['platform'];
 
     if (!query) {
@@ -652,7 +652,12 @@ router.get('/search', async (req) => {
         try {
           const result = await withTimeout(plugin.search!(query, page, type), SEARCH_TIMEOUT, `Search[${plugin.platform}]`);
           if (result && result.data) {
-            return result.data.map(item => ({ ...item, platform: plugin.platform, duration: normalizeDuration(item.duration) }));
+            // 【修改点 1】：如果是单曲(music)则处理 duration，否则(如 sheet)只追加 platform 属性
+            if (type === 'music') {
+              return result.data.map(item => ({ ...item, platform: plugin.platform, duration: normalizeDuration(item.duration) }));
+            } else {
+              return result.data.map(item => ({ ...item, platform: plugin.platform }));
+            }
           }
         } catch (error) {
           songloft.log.warn(`Search[${plugin.platform}] failed: ${error}`);
@@ -661,7 +666,7 @@ router.get('/search', async (req) => {
       });
 
     // 全局超时：如果超时则返回已收集到的结果
-    let nested: MusicItem[][];
+    let nested: any[][];
     try {
       nested = await withTimeout(Promise.all(tasks), SEARCH_TIMEOUT + 2000, 'SearchAll');
     } catch {
@@ -672,27 +677,29 @@ router.get('/search', async (req) => {
     }
     const results = nested.flat();
 
-    // 对时长为 0 的条目尝试通过 getMusicInfo 补充时长
-    const enrichTasks: Promise<void>[] = [];
-    for (const item of results) {
-      if (item.duration > 0) continue;
-      const plugin = Array.from(installedPlugins.values()).find(p => p.platform === item.platform);
-      if (!plugin || typeof plugin.getMusicInfo !== 'function') continue;
-      enrichTasks.push(
-        (async () => {
-          try {
-            const info = await withTimeout(plugin.getMusicInfo!({ id: item.id, platform: item.platform }), PLUGIN_TIMEOUT, `getMusicInfo[${item.platform}]`);
-            if (info && info.duration) {
-              item.duration = normalizeDuration(info.duration);
-            }
-          } catch { /* ignore */ }
-        })()
-      );
-      // 最多并行补 3 条，避免雪崩
-      if (enrichTasks.length >= 3) break;
-    }
-    if (enrichTasks.length > 0) {
-      await Promise.allSettled(enrichTasks);
+    // 【修改点 2】：仅在搜索类型为单曲(music)时，才去尝试通过 getMusicInfo 补充时长
+    if (type === 'music') {
+      const enrichTasks: Promise<void>[] = [];
+      for (const item of results) {
+        if (item.duration > 0) continue;
+        const plugin = Array.from(installedPlugins.values()).find(p => p.platform === item.platform);
+        if (!plugin || typeof plugin.getMusicInfo !== 'function') continue;
+        enrichTasks.push(
+          (async () => {
+            try {
+              const info = await withTimeout(plugin.getMusicInfo!({ id: item.id, platform: item.platform }), PLUGIN_TIMEOUT, `getMusicInfo[${item.platform}]`);
+              if (info && info.duration) {
+                item.duration = normalizeDuration(info.duration);
+              }
+            } catch { /* ignore */ }
+          })()
+        );
+        // 最多并行补 3 条，避免雪崩
+        if (enrichTasks.length >= 3) break;
+      }
+      if (enrichTasks.length > 0) {
+        await Promise.allSettled(enrichTasks);
+      }
     }
 
     return jsonResponse({ isEnd: results.length === 0, data: results });

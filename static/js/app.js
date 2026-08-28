@@ -604,7 +604,7 @@
   var searchSourceTabs = document.getElementById('search-source-tabs');
 
   var lastResults = [];
-  var searchState = { query: '', platform: '', page: 1, loading: false, end: true, requestId: 0 };
+  var searchState = { query: '', platform: '', type: 'music', page: 1, loading: false, end: true, requestId: 0 };
 
   function getSearchPlatforms() {
     var seen = {};
@@ -905,7 +905,11 @@
     var requestId = searchState.requestId;
     var requestedPage = searchState.page;
     var platformParam = searchState.platform ? '&platform=' + encodeURIComponent(searchState.platform) : '';
-    ajax('GET', '/search?q=' + encodeURIComponent(searchState.query) + '&page=' + requestedPage + platformParam, null, function (err, data) {
+
+    // URL 中拼接 type 参数
+    var url = '/search?q=' + encodeURIComponent(searchState.query) + '&page=' + requestedPage + '&type=' + searchState.type + platformParam;
+
+    ajax('GET', url, null, function (err, data) {
       if (requestId !== searchState.requestId) return;
       searchState.loading = false;
       searchLoader.style.display = 'none';
@@ -920,13 +924,49 @@
         return;
       }
       if (requestedPage === 1) searchBtn.disabled = false;
-      if (requestedPage === 1) {
-        searchResults.innerHTML = '<div class="table-wrap"><table class="data-table songs"><thead><tr><th class="col-cover"></th><th>歌曲名</th><th>艺术家</th><th class="col-platform">来源平台</th><th></th></tr></thead><tbody>';
+
+      // 根据搜索类型决定渲染方式
+      if (searchState.type === 'music') {
+        if (requestedPage === 1) {
+          searchResults.innerHTML = '<div class="table-wrap"><table class="data-table songs"><thead><tr><th class="col-cover"></th><th>歌曲名</th><th>艺术家</th><th class="col-platform">来源平台</th><th></th></tr></thead><tbody>';
+        }
+        var tbody = searchResults.querySelector('tbody');
+        if (tbody) {
+          tbody.insertAdjacentHTML('beforeend', renderSearchRows(items, lastResults.length));
+        }
+      } else if (searchState.type === 'sheet') {
+        if (requestedPage === 1) {
+          searchResults.innerHTML = '<div class="rank-grid" id="search-sheet-grid"></div>';
+        }
+        var grid = document.getElementById('search-sheet-grid');
+        if (grid) {
+          var html = '';
+          items.forEach(function (item) {
+            var safeName = escapeHtml(item.title || '未知歌单');
+            var safeDesc = escapeHtml(item.author || item.description || '');
+            var cover = item.coverImg || item.artwork || '';
+            var dataAttrs = 'data-platform="' + escapeHtml(item.platform || '') + '"' +
+              ' data-id="' + escapeHtml(item.id || '') + '"' +
+              ' data-title="' + safeName + '"';
+
+            var extraKeys = [];
+            for (var k in item) {
+              if (['id', 'title', 'description', 'coverImg', 'artwork', 'platform', 'author'].indexOf(k) === -1) {
+                extraKeys.push(k + '=' + encodeURIComponent(String(item[k])));
+              }
+            }
+            dataAttrs += ' data-extra="' + escapeHtml(extraKeys.join('&')) + '"';
+
+            // 直接复用 openHotSheet 点击事件，因为它也是用于查看歌单详情的
+            html += '<div class="rank-card" onclick="openHotSheet(this)" ' + dataAttrs + '>' +
+              '<img class="rank-card-cover" src="' + (cover || '') + '" alt="' + safeName + '" onerror="this.style.display=\'none\';this.nextSibling.style.display=\'flex\'" />' +
+              '<div class="rank-card-cover rank-card-cover-fallback" style="display:' + (cover ? 'none' : 'flex') + ';background:linear-gradient(135deg,#e74c3c,#f39c12);font-size:40px;color:rgba(255,255,255,.9)">📋</div>' +
+              '<div class="rank-card-body"><h3>' + safeName + '</h3><p>' + safeDesc + '</p></div></div>';
+          });
+          grid.insertAdjacentHTML('beforeend', html);
+        }
       }
-      var tbody = searchResults.querySelector('tbody');
-      if (tbody) {
-        tbody.insertAdjacentHTML('beforeend', renderSearchRows(items, lastResults.length));
-      }
+
       Array.prototype.push.apply(lastResults, items);
       searchState.page = requestedPage + 1;
       if (data.isEnd) searchState.end = true;
@@ -939,6 +979,11 @@
       searchResults.innerHTML = '<div class="empty-state">请输入搜索关键词</div>';
       return;
     }
+
+    // 获取下拉框中选择的搜索类型（单曲 or 歌单）
+    var typeSelect = document.getElementById('search-type');
+    searchState.type = typeSelect ? typeSelect.value : 'music';
+
     // 无可用插件时直接提示
     if (noPluginTip && noPluginTip.style.display !== 'none') {
       searchResults.innerHTML = '<div class="empty-state">请先到「设置」页面安装并启用插件，<a href="javascript:goToSettings()" style="color:var(--primary)">前往设置</a></div>';
@@ -1669,36 +1714,43 @@
   }
 
   window.openHotSheet = function (el) {
-    hsCtx.platform = el.getAttribute('data-platform');
-    hsCtx.id = el.getAttribute('data-id');
-    hsCtx.extraStr = el.getAttribute('data-extra') || '';
-    hsCtx.page = 1;
-    hsCtx.isEnd = false;
-    hsCtx.loading = false;
-    var title = el.getAttribute('data-title');
-    hsListEl.style.display = 'none';
-    hsDetailEl.style.display = '';
-    hsDetailTitle.textContent = title || '歌单详情';
+    // 【新增1】：自动切换到“热门歌单”标签页以显示详情容器
+    switchTab('hotsheet');
 
-    var oldBatchBtn = document.getElementById('hs-batch-import-btn');
-    if (!oldBatchBtn) {
-      var hdr = document.querySelector('#hs-detail .rank-detail-header');
-      if (hdr) {
-        var bBtn = document.createElement('button');
-        bBtn.className = 'btn btn-small btn-import';
-        bBtn.id = 'hs-batch-import-btn';
-        bBtn.textContent = '批量导入';
-        bBtn.onclick = batchImportHsSongs;
-        bBtn.style.cssText = 'display:none;margin-left:auto';
-        hdr.appendChild(bBtn);
+    // 【新增2】：用 setTimeout 延迟 50ms，防止被 switchTab 自带的列表重置逻辑覆盖
+    setTimeout(function() {
+      hsCtx.platform = el.getAttribute('data-platform');
+      hsCtx.id = el.getAttribute('data-id');
+      hsCtx.extraStr = el.getAttribute('data-extra') || '';
+      hsCtx.page = 1;
+      hsCtx.isEnd = false;
+      hsCtx.loading = false;
+      var title = el.getAttribute('data-title');
+
+      hsListEl.style.display = 'none';
+      hsDetailEl.style.display = '';
+      hsDetailTitle.textContent = title || '歌单详情';
+
+      var oldBatchBtn = document.getElementById('hs-batch-import-btn');
+      if (!oldBatchBtn) {
+        var hdr = document.querySelector('#hs-detail .rank-detail-header');
+        if (hdr) {
+          var bBtn = document.createElement('button');
+          bBtn.className = 'btn btn-small btn-import';
+          bBtn.id = 'hs-batch-import-btn';
+          bBtn.textContent = '批量导入';
+          bBtn.onclick = batchImportHsSongs;
+          bBtn.style.cssText = 'display:none;margin-left:auto';
+          hdr.appendChild(bBtn);
+        }
+      } else {
+        oldBatchBtn.style.display = 'none';
       }
-    } else {
-      oldBatchBtn.style.display = 'none';
-    }
 
-    hsDetailSongs.innerHTML = '<div class="empty-state">加载中...</div>';
-    window._hsSongs = [];
-    _loadHsPage(true);
+      hsDetailSongs.innerHTML = '<div class="empty-state">加载中...</div>';
+      window._hsSongs = [];
+      _loadHsPage(true);
+    }, 50);
   };
 
   function _loadHsPage(reset) {
