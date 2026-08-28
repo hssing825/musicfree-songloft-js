@@ -7,7 +7,7 @@
   "main": "main.js",
   "permissions": ["storage", "songs.read", "playlists.read", "jsenv", "fs", "inter-plugin"],
   "updateUrl": "https://github.com/Lirenjun11/musicfree-songloft-js/raw/refs/heads/master/plugin.json",
-  "download_url": "https://github.com/Lirenjun11/musicfree-songloft-js/releases/download/v1.1.6/MFPlugin.zip",
+  "download_url": "https://github.com/Lirenjun11/musicfree-songloft-js/releases/download/v1.1.6/musicfree-adapter.jsplugin.zip",
   "entryHash": "",
   "zipHash": ""
 }
